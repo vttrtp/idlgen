@@ -27,6 +27,7 @@ from idlgen import (
     ClientGenerator,
     WASMGenerator,
     JNIGenerator,
+    PythonGenerator,
 )
 
 
@@ -45,6 +46,8 @@ def main():
     parser.add_argument("--java-package", default="", help="Java package name")
     parser.add_argument("--java-output-dir", default="", help="Java source output directory")
     parser.add_argument("--java-output", default="", help="Java source output directory (alternative)")
+    parser.add_argument("--python", action="store_true", help="Generate Python bindings")
+    parser.add_argument("--python-output", default="", help="Python bindings output directory")
     # Explicit output file options (ignored, for compatibility)
     parser.add_argument("--c-api", default="", help="C API header output (ignored)")
     parser.add_argument("--c-api-impl", default="", help="C API impl output (ignored)")
@@ -112,6 +115,17 @@ def main():
             java_path = java_pkg_dir / f"{iface.name}.java"
             java_path.write_text(jni.generate_java_class(iface))
             print(f"Generated: {java_path}")
+
+    # Generate Python bindings if requested
+    generate_python = args.python or args.python_output
+    if generate_python:
+        python_gen = PythonGenerator(idl, namespace)
+        python_output = Path(args.python_output) if args.python_output else output_dir
+        python_output.mkdir(parents=True, exist_ok=True)
+        
+        python_path = python_output / f"{namespace}.py"
+        python_path.write_text(python_gen.generate())
+        print(f"Generated: {python_path}")
 
     for filename, content in files.items():
         path = output_dir / filename

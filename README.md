@@ -53,7 +53,9 @@ python bin/generate_bindings.py <idl_file> \
     --impl-header <header.hpp> \
     [--java] \
     [--java-package <package>] \
-    [--java-output-dir <dir>]
+    [--java-output-dir <dir>] \
+    [--python] \
+    [--python-output <dir>]
 ```
 
 ## Supported Generators
@@ -62,6 +64,7 @@ python bin/generate_bindings.py <idl_file> \
 - **Client** - C++ client that loads library dynamically
 - **WASM** - Emscripten bindings for WebAssembly
 - **JNI** - Java Native Interface bindings
+- **Python** - Python bindings using ctypes
 
 ## IDL Syntax
 
@@ -114,8 +117,14 @@ node build-wasm/samples/samples_test.js
 # After native build completes
 cd samples/tests/java
 mkdir -p out
-javac -d out generated/idl/samples/*.java SamplesTest.java
+javac -d out generated/idl/samples/*.java idl/samples/SamplesTest.java
 java -Djava.library.path=../../../build/samples -cp out idl.samples.SamplesTest
+```
+
+**Python tests:**
+```bash
+# After native build completes
+python3 samples/tests/python/samples_test.py
 ```
 
 ## Directory Structure

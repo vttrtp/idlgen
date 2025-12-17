@@ -9,11 +9,15 @@ set(IDL_GENERATOR_BIN "${CMAKE_CURRENT_SOURCE_DIR}/../bin/generate_bindings.py")
 # Per-language generated output directories (gitignored)
 set(IDL_CPP_GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/cpp/generated")
 set(IDL_JAVA_GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/java/generated")
+set(IDL_JAVA_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/java/idl/samples")
+set(IDL_PYTHON_GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/python/generated")
 set(IDL_WASM_GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm/generated")
 
 # Ensure directories exist
 file(MAKE_DIRECTORY ${IDL_CPP_GENERATED_DIR})
 file(MAKE_DIRECTORY ${IDL_JAVA_GENERATED_DIR})
+file(MAKE_DIRECTORY ${IDL_JAVA_TEST_DIR})
+file(MAKE_DIRECTORY ${IDL_PYTHON_GENERATED_DIR})
 file(MAKE_DIRECTORY ${IDL_WASM_GENERATED_DIR})
 
 # IDL source file
@@ -45,8 +49,10 @@ add_custom_command(
         --api-macro "SAMPLES_API"
         --java-package "idl.samples"
         --java-output "${IDL_JAVA_GENERATED_DIR}"
+        --python
+        --python-output "${IDL_PYTHON_GENERATED_DIR}"
     DEPENDS ${IDL_SAMPLES_FILE} ${IDL_GENERATOR_SOURCES}
-    COMMENT "Generating bindings from samples.idl (C++, Java, WASM)"
+    COMMENT "Generating bindings from samples.idl (C++, Java, WASM, Python)"
     VERBATIM
 )
 

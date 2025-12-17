@@ -6,6 +6,7 @@ Parses C++-like IDL definitions and generates:
   2. C++ client wrapper for dynamic loading
   3. Emscripten WASM bindings
   4. JNI bindings for Java interop
+  5. Python bindings using ctypes
 """
 
 from .types import Param, Member, Method, Interface, Struct, ParsedIDL
@@ -15,9 +16,11 @@ from .c_api_generator import CAPIGenerator
 from .client_generator import ClientGenerator
 from .wasm_generator import WASMGenerator
 from .jni_generator import JNIGenerator
+from .python_generator import PythonGenerator
 
 __all__ = [
     'Param', 'Member', 'Method', 'Interface', 'Struct', 'ParsedIDL',
     'IDLParser', 'TypeMapper',
     'CAPIGenerator', 'ClientGenerator', 'WASMGenerator', 'JNIGenerator',
+    'PythonGenerator',
 ]
