@@ -1,0 +1,11 @@
+{
+  "name": "idlgen-samples",
+  "version": "1.0.0",
+  "description": "IDL Generator samples and tests",
+  "dependencies": [
+    {
+      "name": "gtest",
+      "platform": "!emscripten"
+    }
+  ]
+}

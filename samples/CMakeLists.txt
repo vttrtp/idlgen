@@ -1,5 +1,5 @@
 # IDL Generator Samples
-# Included from root CMakeLists.txt - not a standalone project
+# Can be built standalone or as part of parent project
 
 # Paths
 set(IDL_SAMPLES_DIR "${CMAKE_CURRENT_SOURCE_DIR}")

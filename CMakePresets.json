@@ -1,0 +1,75 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "environment": {
+        "VCPKG_ROOT": "${sourceDir}/../../vcpkg"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_BUILD_TYPE": "release",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_MANIFEST_MODE": "ON",
+        "VCPKG_MANIFEST_INSTALL": "ON"
+      }
+    },
+    {
+      "name": "wasm-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "environment": {
+        "EMSDK": "${sourceDir}/../../emsdk"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+        "BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "default",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build"
+    },
+    {
+      "name": "debug",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_BUILD_TYPE": "debug"
+      }
+    },
+    {
+      "name": "wasm",
+      "inherits": "wasm-base",
+      "binaryDir": "${sourceDir}/build-wasm"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default"
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "wasm",
+      "configurePreset": "wasm"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
