@@ -1,0 +1,19 @@
+# Generated test outputs (per-language)
+samples/tests/cpp/generated/
+samples/tests/java/generated/
+samples/tests/wasm/generated/
+
+# Build directories
+samples/build/
+samples/build-wasm/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+
+# Java compiled classes
+samples/tests/java/out/
+*.class
