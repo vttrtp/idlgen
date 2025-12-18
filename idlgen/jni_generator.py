@@ -85,12 +85,16 @@ class JNIGenerator:
         return "\n".join(lines)
 
     def generate_java_types(self) -> str:
-        """Generate shared Java types file (structs and callbacks)"""
+        """Generate shared Java types file (enums, structs and callbacks)"""
         lines = [
             "// AUTO-GENERATED - DO NOT EDIT",
             f"package {self.java_package};",
             "",
         ]
+
+        # Generate enums
+        for enum in self.idl.enums:
+            lines.extend(self._java_enum_class(enum))
 
         # Generate callback functional interfaces
         for cb in self.idl.callbacks:
@@ -101,6 +105,40 @@ class JNIGenerator:
             lines.extend(self._java_struct_class(struct))
 
         return "\n".join(lines)
+
+    def _java_enum_class(self, enum) -> list[str]:
+        """Generate Java enum class (package-private to allow multiple in Types.java)"""
+        lines = [
+            f"/** Enum {enum.name} */",
+            f"enum {enum.name} {{",
+        ]
+        
+        for i, val in enumerate(enum.values):
+            comma = "," if i < len(enum.values) - 1 else ";"
+            lines.append(f"    {val.name}({val.value}){comma}")
+        
+        lines.extend([
+            "",
+            "    private final int value;",
+            "",
+            f"    {enum.name}(int value) {{",
+            "        this.value = value;",
+            "    }",
+            "",
+            "    public int getValue() {",
+            "        return value;",
+            "    }",
+            "",
+            f"    public static {enum.name} fromValue(int value) {{",
+            f"        for ({enum.name} e : values()) {{",
+            "            if (e.value == value) return e;",
+            "        }",
+            f"        throw new IllegalArgumentException(\"Unknown {enum.name} value: \" + value);",
+            "    }",
+            "}",
+            "",
+        ])
+        return lines
 
     def generate_java_class(self, cls: Class) -> str:
         """Generate Java class for a class"""
@@ -317,6 +355,14 @@ class JNIGenerator:
         """Check if a type is a struct defined in IDL"""
         return any(s.name == type_name for s in self.idl.structs)
 
+    def _is_class_type(self, type_name: str) -> bool:
+        """Check if a type is a class defined in IDL"""
+        return any(c.name == type_name for c in self.idl.classes)
+
+    def _is_enum_type(self, type_name: str) -> bool:
+        """Check if a type is an enum defined in IDL"""
+        return any(e.name == type_name for e in self.idl.enums)
+
     def _get_struct(self, type_name: str):
         """Get struct definition by name"""
         return next((s for s in self.idl.structs if s.name == type_name), None)
@@ -424,6 +470,18 @@ class JNIGenerator:
                 cb = self._get_callback(p.type)
                 lines.extend(self._generate_jni_callback_wrapper(p, cb))
                 cpp_arg_names.append(f"cpp_{p.name}")
+            elif self._is_class_type(p.type):
+                # Class object parameter - convert jlong handle to C++ pointer
+                lines.append(f"    auto* cpp_{p.name} = jlongToPtr<{self.namespace}::{p.type}>({p.name});")
+                if p.is_reference:
+                    # Reference parameter - dereference
+                    cpp_arg_names.append(f"*cpp_{p.name}")
+                else:
+                    # Pointer parameter
+                    cpp_arg_names.append(f"cpp_{p.name}")
+            elif self._is_enum_type(p.type):
+                # Enum parameter - cast jint to enum type
+                cpp_arg_names.append(f"static_cast<::{p.type}>({p.name})")
             elif self._is_struct_type(p.type):
                 # Convert Java object to C++ struct
                 # Structs are defined at global scope in C API header (not in namespace)
@@ -437,7 +495,11 @@ class JNIGenerator:
                     getter = self._jni_field_getter(m.type)
                     lines.append(f'    jfieldID {field_id} = env->GetFieldID({p.name}Class, "{m.name}", "{jni_sig}");')
                     lines.append(f"    cpp_{p.name}.{m.name} = env->{getter}({p.name}, {field_id});")
-                cpp_arg_names.append(f"cpp_{p.name}")
+                # Pass pointer or reference based on parameter type
+                if p.is_pointer:
+                    cpp_arg_names.append(f"&cpp_{p.name}")
+                else:
+                    cpp_arg_names.append(f"cpp_{p.name}")
             else:
                 cpp_arg_names.append(p.name)
         
@@ -502,6 +564,22 @@ class JNIGenerator:
             lines.append(f'    jmethodID retCtor = env->GetMethodID(retClass, "<init>", "{sig}");')
             ctor_args = ", ".join(f"ret.{m.name}" for m in struct.members)
             lines.append(f"    return env->NewObject(retClass, retCtor, {ctor_args});")
+        elif method.return_type.endswith('*') and self._is_class_type(method.return_type.rstrip('*').strip()):
+            # Return class pointer - convert to jlong handle
+            lines.append(f"    auto ret = obj->{method.name}({cpp_args});")
+            # Release byte arrays
+            for p in method.params:
+                if p.type == "uint8_t" and p.is_pointer:
+                    lines.append(f"    env->ReleaseByteArrayElements({p.name}, cpp_{p.name}_ptr, JNI_ABORT);")
+            lines.append("    return ptrToJlong(ret);")
+        elif method.return_type.endswith('*') and self._is_struct_type(method.return_type.rstrip('*').strip()):
+            # Return struct pointer - convert to jlong
+            lines.append(f"    auto ret = obj->{method.name}({cpp_args});")
+            # Release byte arrays
+            for p in method.params:
+                if p.type == "uint8_t" and p.is_pointer:
+                    lines.append(f"    env->ReleaseByteArrayElements({p.name}, cpp_{p.name}_ptr, JNI_ABORT);")
+            lines.append("    return ptrToJlong(ret);")
         elif method.return_type == "bool":
             lines.append(f"    auto ret = obj->{method.name}({cpp_args});")
             # Release byte arrays
@@ -509,6 +587,20 @@ class JNIGenerator:
                 if p.type == "uint8_t" and p.is_pointer:
                     lines.append(f"    env->ReleaseByteArrayElements({p.name}, cpp_{p.name}_ptr, JNI_ABORT);")
             lines.append("    return ret ? JNI_TRUE : JNI_FALSE;")
+        elif method.return_type == "string":
+            lines.append(f"    auto ret = obj->{method.name}({cpp_args});")
+            # Release byte arrays
+            for p in method.params:
+                if p.type == "uint8_t" and p.is_pointer:
+                    lines.append(f"    env->ReleaseByteArrayElements({p.name}, cpp_{p.name}_ptr, JNI_ABORT);")
+            lines.append("    return env->NewStringUTF(ret.c_str());")
+        elif self._is_enum_type(method.return_type):
+            lines.append(f"    auto ret = obj->{method.name}({cpp_args});")
+            # Release byte arrays
+            for p in method.params:
+                if p.type == "uint8_t" and p.is_pointer:
+                    lines.append(f"    env->ReleaseByteArrayElements({p.name}, cpp_{p.name}_ptr, JNI_ABORT);")
+            lines.append("    return static_cast<jint>(ret);")
         else:
             lines.append(f"    auto ret = obj->{method.name}({cpp_args});")
             # Release byte arrays
@@ -538,6 +630,12 @@ class JNIGenerator:
         # Callbacks use their interface type
         if self._is_callback_type(param.type):
             return f"{param.type} {param.name}"
+        # Class types are passed as long handles
+        if self._is_class_type(param.type):
+            return f"long {param.name}"
+        # Enum types use int in Java (mapped to native int)
+        if self._is_enum_type(param.type):
+            return f"int {param.name}"
         java_type = self._idl_to_java_type(param.type)
         if param.is_pointer and param.type == "uint8_t":
             java_type = "byte[]"
@@ -560,6 +658,12 @@ class JNIGenerator:
         # Check if it's a callback type
         if self._is_callback_type(param.type):
             return "jobject"
+        # Check if it's a class type - use jlong handle
+        if self._is_class_type(param.type):
+            return "jlong"
+        # Check if it's an enum type - use jint
+        if self._is_enum_type(param.type):
+            return "jint"
         # Check if it's a struct type
         if any(s.name == param.type for s in self.idl.structs):
             return "jobject"
@@ -582,10 +686,26 @@ class JNIGenerator:
         if TypeMapper.is_vector(idl_type):
             inner = TypeMapper.vector_inner(idl_type)
             return f"List<{inner}>"
+        # Handle pointer types
+        base_type = idl_type.rstrip('*').strip()
+        is_pointer = idl_type.endswith('*')
+        # Class pointer returns long handle
+        if self._is_class_type(base_type):
+            return "long"
+        # Struct pointer returns long
+        if is_pointer and self._is_struct_type(base_type):
+            return "long"
+        # Enum returns int
+        if self._is_enum_type(idl_type):
+            return "int"
         return self._idl_to_java_type(idl_type)
 
     def _return_to_jni_type(self, idl_type: str) -> str:
         """Convert return type to JNI type"""
+        # Handle pointer types (strip * for type checking)
+        base_type = idl_type.rstrip('*').strip()
+        is_pointer = idl_type.endswith('*')
+        
         if TypeMapper.is_vector(idl_type):
             return "jobject"
         if idl_type == "bool":
@@ -596,9 +716,16 @@ class JNIGenerator:
             return "jdouble"
         if idl_type == "float":
             return "jfloat"
+        # Check if it's an enum type - use jint
+        if any(e.name == base_type for e in self.idl.enums):
+            return "jint"
+        # Check if it's a class type - use jlong handle
+        if any(c.name == base_type for c in self.idl.classes):
+            return "jlong"
         # Check if it's a struct type
-        if any(s.name == idl_type for s in self.idl.structs):
-            return "jobject"
+        if any(s.name == base_type for s in self.idl.structs):
+            # Struct pointer returns jlong, struct value returns jobject
+            return "jlong" if is_pointer else "jobject"
         return "jint"
 
     def _java_type_signature(self, idl_type: str) -> str:

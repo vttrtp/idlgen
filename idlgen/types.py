@@ -55,8 +55,23 @@ class Struct:
 
 
 @dataclass
+class EnumValue:
+    """Enum value with optional explicit value"""
+    name: str
+    value: int | None = None
+
+
+@dataclass
+class Enum:
+    """IDL enum definition"""
+    name: str
+    values: list[EnumValue] = field(default_factory=list)
+
+
+@dataclass
 class ParsedIDL:
     """Complete parsed IDL result"""
+    enums: list[Enum] = field(default_factory=list)
     structs: list[Struct] = field(default_factory=list)
     classes: list[Class] = field(default_factory=list)
     callbacks: list[Callback] = field(default_factory=list)

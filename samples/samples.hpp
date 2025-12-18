@@ -13,6 +13,7 @@ namespace samples {
 using ProgressCallback = std::function<void(int current, int total)>;
 using FilterCallback = std::function<bool(int value)>;
 using TransformCallback = std::function<int(int value)>;
+using ImageCallback = std::function<bool(const ImageData&)>;
 
 /**
  * @brief Simple calculator for testing numeric types
@@ -154,6 +155,169 @@ public:
         }
         return sum;
     }
+};
+
+/**
+ * @brief Image processor for testing pointer and reference parameters
+ */
+class SAMPLES_API ImageProcessor {
+public:
+    ImageProcessor() = default;
+
+    // Process raw data pointer (e.g., image bytes)
+    [[nodiscard]] int processRawData(const uint8_t* data, int size) {
+        if (!data || size <= 0) return 0;
+        int sum = 0;
+        for (int i = 0; i < size; ++i) {
+            sum += data[i];
+        }
+        return sum;
+    }
+
+    // Read pixel from raw data
+    [[nodiscard]] int readPixel(const uint8_t* data, int width, int x, int y) {
+        if (!data || width <= 0) return -1;
+        return data[y * width + x];
+    }
+
+    // Normalize box in place (clamp to image bounds)
+    [[nodiscard]] bool normalizeBox(BoundingBox* box, int maxWidth, int maxHeight) {
+        if (!box) return false;
+        if (box->x < 0) box->x = 0;
+        if (box->y < 0) box->y = 0;
+        if (box->x + box->width > maxWidth) box->width = maxWidth - box->x;
+        if (box->y + box->height > maxHeight) box->height = maxHeight - box->y;
+        return true;
+    }
+
+    // Get aspect ratio from const pointer
+    [[nodiscard]] double getBoxAspectRatio(const BoundingBox* box) {
+        if (!box || box->height == 0) return 0.0;
+        return static_cast<double>(box->width) / box->height;
+    }
+
+    // Clone box - caller owns returned memory
+    [[nodiscard]] BoundingBox* cloneBox(const BoundingBox& source) {
+        auto* copy = new BoundingBox();
+        copy->x = source.x;
+        copy->y = source.y;
+        copy->width = source.width;
+        copy->height = source.height;
+        copy->confidence = source.confidence;
+        return copy;
+    }
+
+    // Get image size from struct reference
+    [[nodiscard]] int getImageSize(const ImageData& info) {
+        return info.width * info.height * info.channels;
+    }
+
+    // Process images with callback
+    [[nodiscard]] int processImages(int count, ImageCallback callback) {
+        int processed = 0;
+        for (int i = 0; i < count; ++i) {
+            ImageData img{100 + i, 100 + i, 3};
+            if (callback(img)) {
+                ++processed;
+            }
+        }
+        return processed;
+    }
+};
+
+/**
+ * @brief Object manager for testing class object parameters
+ */
+class SAMPLES_API ObjectManager {
+public:
+    ObjectManager() = default;
+
+    // Use calculator by pointer
+    [[nodiscard]] int useCalculator(Calculator* calc, int a, int b) {
+        if (!calc) return 0;
+        return calc->add(a, b);
+    }
+
+    // Inspect calculator by const pointer
+    [[nodiscard]] double inspectCalculator(const Calculator* calc) {
+        if (!calc) return 0.0;
+        return static_cast<double>(calc->getVersionMajor()) + 
+               static_cast<double>(calc->getVersionMinor()) / 10.0;
+    }
+
+    // Get version from const reference
+    [[nodiscard]] int getCalculatorVersion(const Calculator& calc) {
+        return calc.getVersionMajor() * 100 + calc.getVersionMinor();
+    }
+
+    // Create new calculator - caller owns memory
+    [[nodiscard]] Calculator* createCalculator() {
+        return new Calculator();
+    }
+
+    // Combine results from two calculators
+    [[nodiscard]] int combineResults(const Calculator& calc1, const Calculator& calc2) {
+        return calc1.getTotal() + calc2.getTotal();
+    }
+};
+
+/**
+ * @brief Task processor for testing enum parameters
+ */
+class SAMPLES_API TaskProcessor {
+public:
+    TaskProcessor() : status_(Status_Unknown) {}
+
+    // Get current status
+    [[nodiscard]] Status getStatus() const { return status_; }
+
+    // Set status
+    bool setStatus(Status status) {
+        status_ = status;
+        return true;
+    }
+
+    // Get color by index
+    [[nodiscard]] Color getColorByIndex(int index) {
+        switch (index % 3) {
+            case 0: return Color_Red;
+            case 1: return Color_Green;
+            default: return Color_Blue;
+        }
+    }
+
+    // Check if color is primary
+    [[nodiscard]] bool isPrimaryColor(Color color) {
+        // All RGB colors are primary in this context
+        return color == Color_Red || color == Color_Green || color == Color_Blue;
+    }
+
+    // Convert status to string
+    [[nodiscard]] std::string statusToString(Status status) {
+        switch (status) {
+            case Status_Unknown: return "Unknown";
+            case Status_Pending: return "Pending";
+            case Status_Active: return "Active";
+            case Status_Completed: return "Completed";
+            case Status_Failed: return "Failed";
+            default: return "Invalid";
+        }
+    }
+
+    // Parse status from code
+    [[nodiscard]] Status statusFromCode(int code) {
+        switch (code) {
+            case 0: return Status_Unknown;
+            case 1: return Status_Pending;
+            case 10: return Status_Active;
+            case 20: return Status_Completed;
+            case 100: return Status_Failed;
+            default: return Status_Unknown;
+        }
+    }
+
+private:
+    Status status_;
 };
 
 } // namespace samples

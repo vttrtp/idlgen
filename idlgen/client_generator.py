@@ -29,6 +29,12 @@ class ClientGenerator:
             "",
         ]
 
+        # Generate using declarations for enums
+        for e in self.idl.enums:
+            lines.append(f"using {e.name} = ::{e.name};")
+        if self.idl.enums:
+            lines.append("")
+
         for d in self.idl.structs:
             lines.append(f"using {d.name} = ::{d.name};")
         if self.idl.structs:

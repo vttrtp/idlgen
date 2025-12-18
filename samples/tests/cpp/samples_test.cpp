@@ -252,6 +252,78 @@ TEST(AsyncProcessorTest, CAPICallbacks) {
     EXPECT_EQ(sumDoubled, 12);
 }
 
+// ============================================================================
+// TaskProcessor Tests (Enum support)
+// ============================================================================
+
+TEST(TaskProcessorTest, EnumStatusMethods) {
+    samples::TaskProcessor processor;
+    
+    // Test initial status
+    EXPECT_EQ(processor.getStatus(), Status_Unknown);
+    
+    // Test setStatus
+    EXPECT_TRUE(processor.setStatus(Status_Active));
+    EXPECT_EQ(processor.getStatus(), Status_Active);
+    
+    // Test statusToString
+    EXPECT_STREQ(processor.statusToString(Status_Unknown).c_str(), "Unknown");
+    EXPECT_STREQ(processor.statusToString(Status_Pending).c_str(), "Pending");
+    EXPECT_STREQ(processor.statusToString(Status_Active).c_str(), "Active");
+    EXPECT_STREQ(processor.statusToString(Status_Completed).c_str(), "Completed");
+    EXPECT_STREQ(processor.statusToString(Status_Failed).c_str(), "Failed");
+    
+    // Test statusFromCode
+    EXPECT_EQ(processor.statusFromCode(0), Status_Unknown);
+    EXPECT_EQ(processor.statusFromCode(1), Status_Pending);
+    EXPECT_EQ(processor.statusFromCode(10), Status_Active);
+    EXPECT_EQ(processor.statusFromCode(20), Status_Completed);
+    EXPECT_EQ(processor.statusFromCode(100), Status_Failed);
+}
+
+TEST(TaskProcessorTest, EnumColorMethods) {
+    samples::TaskProcessor processor;
+    
+    // Test getColorByIndex
+    EXPECT_EQ(processor.getColorByIndex(0), Color_Red);
+    EXPECT_EQ(processor.getColorByIndex(1), Color_Green);
+    EXPECT_EQ(processor.getColorByIndex(2), Color_Blue);
+    EXPECT_EQ(processor.getColorByIndex(3), Color_Red);  // Wraps around
+    
+    // Test isPrimaryColor - all RGB are primary in this context
+    EXPECT_TRUE(processor.isPrimaryColor(Color_Red));
+    EXPECT_TRUE(processor.isPrimaryColor(Color_Green));
+    EXPECT_TRUE(processor.isPrimaryColor(Color_Blue));
+}
+
+struct TaskProcessorDeleter {
+    void operator()(TaskProcessorHandle* p) const { TaskProcessor_destroy(p); }
+};
+using TaskProcessorPtr = std::unique_ptr<TaskProcessorHandle, TaskProcessorDeleter>;
+
+TEST(TaskProcessorTest, CAPIEnumMethods) {
+    TaskProcessorPtr processor(TaskProcessor_create());
+    ASSERT_NE(processor, nullptr);
+    
+    // Test initial status
+    EXPECT_EQ(TaskProcessor_getStatus(processor.get()), Status_Unknown);
+    
+    // Test setStatus
+    EXPECT_TRUE(TaskProcessor_setStatus(processor.get(), Status_Completed));
+    EXPECT_EQ(TaskProcessor_getStatus(processor.get()), Status_Completed);
+    
+    // Test statusToString via C API
+    EXPECT_STREQ(TaskProcessor_statusToString(processor.get(), Status_Active), "Active");
+    
+    // Test statusFromCode
+    EXPECT_EQ(TaskProcessor_statusFromCode(processor.get(), 100), Status_Failed);
+    
+    // Test color methods
+    EXPECT_EQ(TaskProcessor_getColorByIndex(processor.get(), 0), Color_Red);
+    EXPECT_EQ(TaskProcessor_getColorByIndex(processor.get(), 1), Color_Green);
+    EXPECT_TRUE(TaskProcessor_isPrimaryColor(processor.get(), Color_Blue));
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

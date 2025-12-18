@@ -16,6 +16,7 @@ class CAPIGenerator:
 
     def generate_header(self) -> str:
         lines = self._header_preamble()
+        lines.extend(self._generate_enums())
         lines.extend(self._generate_structs())
         lines.extend(self._generate_callbacks())
         lines.extend(self._generate_class_decls())
@@ -69,6 +70,21 @@ class CAPIGenerator:
             f"#endif // {self.namespace.upper()}_C_API_H",
         ]
 
+    def _generate_enums(self) -> list[str]:
+        """Generate enum type definitions"""
+        lines = []
+        for enum in self.idl.enums:
+            lines.append(f"typedef enum {enum.name} {{")
+            for i, val in enumerate(enum.values):
+                comma = "," if i < len(enum.values) - 1 else ""
+                if val.value is not None:
+                    lines.append(f"    {enum.name}_{val.name} = {val.value}{comma}")
+                else:
+                    lines.append(f"    {enum.name}_{val.name}{comma}")
+            lines.append(f"}} {enum.name};")
+            lines.append("")
+        return lines
+
     def _generate_structs(self) -> list[str]:
         lines = []
         for d in self.idl.structs:
@@ -79,11 +95,25 @@ class CAPIGenerator:
             lines.append("")
         return lines
 
+    def _callback_param_to_c(self, param: Param) -> str:
+        """Convert callback parameter to C type"""
+        base = TypeMapper.to_c(param.type)
+        # Struct references become const pointers in C callbacks
+        if param.is_reference and self._is_struct_type(param.type):
+            if param.is_const:
+                return f"const {base}*"
+            return f"{base}*"
+        if param.is_const:
+            base = f"const {base}"
+        if param.is_pointer:
+            return f"{base}*"
+        return base
+
     def _generate_callbacks(self) -> list[str]:
         """Generate callback function pointer typedefs"""
         lines = []
         for cb in self.idl.callbacks:
-            params = ", ".join(TypeMapper.to_c(p.type) for p in cb.params) or "void"
+            params = ", ".join(self._callback_param_to_c(p) for p in cb.params) or "void"
             ret = TypeMapper.to_c(cb.return_type)
             lines.append(f"typedef {ret} (*{cb.name})({params});")
         if self.idl.callbacks:
@@ -158,9 +188,14 @@ class CAPIGenerator:
         cpp_class = f"{self.namespace}::{cls.name}"
         lines = []
 
+        # Check if any method returns string
+        has_string_return = any(m.return_type == "string" for m in cls.methods if not m.is_constructor)
+
         # Handle struct
         lines.append(f"struct {h} {{")
         lines.append(f"    std::unique_ptr<{cpp_class}> impl;")
+        if has_string_return:
+            lines.append("    std::string last_string;")
         lines.append("};")
         lines.append("")
 
@@ -261,13 +296,32 @@ class CAPIGenerator:
                 null_ret = "{}"
             lines.append(f"    if ({' || '.join(null_checks)}) return {null_ret};")
 
-            cpp_args = ", ".join(p.name for p in method.params)
+            # Convert parameters for C++ call
+            cpp_args = self._build_cpp_args(method.params)
+            
             if TypeMapper.is_vector(method.return_type):
                 inner = TypeMapper.vector_inner(method.return_type)
                 result_name = self._result_struct_name(cls.name, inner)
                 lines.append(f"    auto result = new {result_name}();")
                 lines.append(f"    result->data = handle->impl->{method.name}({cpp_args});")
                 lines.append("    return result;")
+            elif method.return_type == "string":
+                # Store string in handle to keep it alive
+                lines.append(f"    handle->last_string = handle->impl->{method.name}({cpp_args});")
+                lines.append("    return handle->last_string.c_str();")
+            elif method.return_type.endswith('*'):
+                # Pointer return - check if it's a class type
+                base_type = method.return_type.rstrip('*').strip()
+                if self._is_class_type(base_type):
+                    # Wrap returned class pointer in a handle
+                    handle_type = f"{base_type}Handle"
+                    lines.append(f"    auto* obj = handle->impl->{method.name}({cpp_args});")
+                    lines.append(f"    if (!obj) return nullptr;")
+                    lines.append(f"    auto* result = new {handle_type}();")
+                    lines.append(f"    result->impl = std::unique_ptr<{self.namespace}::{base_type}>(obj);")
+                    lines.append("    return result;")
+                else:
+                    lines.append(f"    return handle->impl->{method.name}({cpp_args});")
             else:
                 lines.append(f"    return handle->impl->{method.name}({cpp_args});")
 
@@ -275,6 +329,75 @@ class CAPIGenerator:
             lines.append("")
 
         return lines
+
+    def _get_callback(self, type_name: str):
+        """Get callback definition by name"""
+        return next((cb for cb in self.idl.callbacks if cb.name == type_name), None)
+
+    def _needs_callback_wrapper(self, cb) -> bool:
+        """Check if callback needs a wrapper (has struct reference params)"""
+        for p in cb.params:
+            if self._is_struct_type(p.type) and p.is_reference:
+                return True
+        return False
+
+    def _build_cpp_args(self, params: list[Param]) -> str:
+        """Build C++ argument list, converting handles to impl pointers"""
+        args = []
+        for p in params:
+            if self._is_callback_type(p.type):
+                # Check if callback needs wrapper
+                cb = self._get_callback(p.type)
+                if cb and self._needs_callback_wrapper(cb):
+                    # Generate inline lambda wrapper
+                    wrapper = self._generate_callback_wrapper_inline(p.name, cb)
+                    args.append(wrapper)
+                else:
+                    args.append(p.name)
+            elif self._is_class_type(p.type):
+                # Handle pointer -> impl pointer or reference
+                if p.is_reference:
+                    # Reference parameter - dereference impl pointer
+                    args.append(f"*{p.name}->impl")
+                elif p.is_pointer:
+                    # Pointer parameter - get raw impl pointer
+                    args.append(f"({p.name} && {p.name}->impl) ? {p.name}->impl.get() : nullptr")
+                else:
+                    # By value (unlikely for classes) - dereference
+                    args.append(f"*{p.name}->impl")
+            elif self._is_struct_type(p.type) and p.is_reference:
+                # Struct reference - dereference pointer if needed
+                args.append(f"*{p.name}" if p.is_pointer else p.name)
+            else:
+                args.append(p.name)
+        return ", ".join(args)
+
+    def _generate_callback_wrapper_inline(self, name: str, cb) -> str:
+        """Generate an inline lambda wrapper for callbacks with struct references"""
+        # Build parameter list for the C++ lambda
+        cpp_params = []
+        c_call_args = []
+        for p in cb.params:
+            if self._is_struct_type(p.type) and p.is_reference:
+                if p.is_const:
+                    cpp_params.append(f"const ::{p.type}& {p.name}")
+                else:
+                    cpp_params.append(f"::{p.type}& {p.name}")
+                c_call_args.append(f"&{p.name}")
+            else:
+                cpp_params.append(f"{TypeMapper.to_cpp(p.type)} {p.name}")
+                c_call_args.append(p.name)
+        
+        cpp_params_str = ", ".join(cpp_params)
+        c_call_args_str = ", ".join(c_call_args)
+        
+        # Return type handling
+        if cb.return_type == "bool":
+            return f"[{name}]({cpp_params_str}) {{ return {name}({c_call_args_str}) != 0; }}"
+        elif cb.return_type == "void":
+            return f"[{name}]({cpp_params_str}) {{ {name}({c_call_args_str}); }}"
+        else:
+            return f"[{name}]({cpp_params_str}) {{ return {name}({c_call_args_str}); }}"
 
     def _attr_getter_impl(self, cls: Class, member: Member) -> list[str]:
         h = f"{cls.name}Handle"
@@ -293,6 +416,20 @@ class CAPIGenerator:
         """Check if type is a callback"""
         return any(cb.name == type_name for cb in self.idl.callbacks)
 
+    def _is_class_type(self, type_name: str) -> bool:
+        """Check if type is a class defined in IDL"""
+        # Strip pointer suffix if present
+        clean_type = type_name.rstrip('*').strip()
+        return any(c.name == clean_type for c in self.idl.classes)
+
+    def _is_struct_type(self, type_name: str) -> bool:
+        """Check if type is a struct defined in IDL"""
+        return any(s.name == type_name for s in self.idl.structs)
+
+    def _is_enum_type(self, type_name: str) -> bool:
+        """Check if type is an enum defined in IDL"""
+        return any(e.name == type_name for e in self.idl.enums)
+
     def _param_to_c(self, param: Param) -> str:
         """Convert param to C declaration"""
         if param.type == 'string':
@@ -301,6 +438,13 @@ class CAPIGenerator:
         # Callback types are already function pointers
         if self._is_callback_type(param.type):
             return f'{param.type} {param.name}'
+        
+        # Class types use Handle pointers
+        if self._is_class_type(param.type):
+            handle = f"{param.type}Handle"
+            if param.is_const:
+                return f'const {handle}* {param.name}'
+            return f'{handle}* {param.name}'
         
         base = TypeMapper.to_c(param.type)
         if param.is_const:
@@ -322,6 +466,11 @@ class CAPIGenerator:
             return "void"
         if idl_type == "bool":
             return "int"
+        # Class pointer returns use Handle
+        if idl_type.endswith('*'):
+            base_type = idl_type.rstrip('*').strip()
+            if self._is_class_type(base_type):
+                return f"{base_type}Handle*"
         return TypeMapper.to_c(idl_type)
 
     def _c_return_type(self, idl_type: str, result_type: str) -> str:

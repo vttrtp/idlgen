@@ -1,7 +1,7 @@
 """C++-like IDL parser"""
 
 import re
-from .types import Param, Member, Method, Class, Struct, Callback, ParsedIDL
+from .types import Param, Member, Method, Class, Struct, Callback, Enum, EnumValue, ParsedIDL
 
 
 class IDLParser:
@@ -17,10 +17,36 @@ class IDLParser:
 
     def parse(self) -> ParsedIDL:
         result = ParsedIDL()
+        result.enums = self._parse_enums()
         result.structs = self._parse_structs()
         result.callbacks = self._parse_callbacks()
         result.classes = self._parse_classes()
         return result
+
+    def _parse_enums(self) -> list[Enum]:
+        """Parse enum declarations like: enum Color { Red, Green = 5, Blue };"""
+        enums = []
+        pattern = r'enum\s+(\w+)\s*\{([^}]*)\}'
+        for match in re.finditer(pattern, self.content):
+            name, body = match.groups()
+            values = []
+            current_value = 0
+            for item in body.split(','):
+                item = item.strip()
+                if not item:
+                    continue
+                # Check for explicit value: Name = value
+                if '=' in item:
+                    parts = item.split('=')
+                    val_name = parts[0].strip()
+                    val_value = int(parts[1].strip())
+                    values.append(EnumValue(name=val_name, value=val_value))
+                    current_value = val_value + 1
+                else:
+                    values.append(EnumValue(name=item, value=current_value))
+                    current_value += 1
+            enums.append(Enum(name=name, values=values))
+        return enums
 
     def _parse_structs(self) -> list[Struct]:
         structs = []

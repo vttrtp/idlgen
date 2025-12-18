@@ -72,6 +72,9 @@ class PythonGenerator:
             "",
         ]
 
+        # Generate enum definitions
+        lines.extend(self._generate_enums())
+
         # Generate struct definitions
         lines.extend(self._generate_structs())
 
@@ -89,6 +92,30 @@ class PythonGenerator:
             lines.extend(self._generate_class(cls))
 
         return "\n".join(lines)
+
+    def _generate_enums(self) -> list[str]:
+        """Generate Python enum classes for IDL enums"""
+        if not self.idl.enums:
+            return []
+        
+        lines = [
+            "# ══════════════════════════════════════════════════════════════",
+            "# Enum Definitions",
+            "# ══════════════════════════════════════════════════════════════",
+            "",
+            "from enum import IntEnum",
+            "",
+        ]
+        
+        for enum in self.idl.enums:
+            lines.append(f"class {enum.name}(IntEnum):")
+            lines.append(f'    """Enum {enum.name}"""')
+            for val in enum.values:
+                lines.append(f"    {val.name} = {val.value}")
+            lines.append("")
+        
+        lines.append("")
+        return lines
 
     def _generate_structs(self) -> list[str]:
         """Generate ctypes Structure classes for IDL structs"""

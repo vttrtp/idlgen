@@ -1,9 +1,26 @@
 // IDL Samples for testing code generation
 // This file demonstrates all IDL features:
+//   - Enums with explicit and implicit values
 //   - Structs with various field types
 //   - Interfaces with different parameter/return types
 //   - Callbacks with different signatures
 //   - Vector returns, struct parameters, etc.
+
+// Color enum for testing basic enum support
+enum Color {
+    Red,
+    Green,
+    Blue
+};
+
+// Status enum with explicit values
+enum Status {
+    Unknown = 0,
+    Pending = 1,
+    Active = 10,
+    Completed = 20,
+    Failed = 100
+};
 
 // Simple 2D point
 struct Point {
@@ -92,4 +109,83 @@ class AsyncProcessor {
 
     // Transform values using callback - tests int callback
     int sumTransformed(int start, int end, TransformCallback transform);
+};
+
+// Image data struct for testing pointer parameters
+struct ImageData {
+    int width;
+    int height;
+    int channels;
+};
+
+// Callback for image processing
+callback ImageCallback(const ImageData& image) -> bool;
+
+// Image processor for testing pointer and reference parameters with raw data
+class ImageProcessor {
+    ImageProcessor();
+
+    // Test receiving raw data pointer (e.g., image bytes)
+    int processRawData(const uint8_t* data, int size);
+
+    // Test receiving pointer with output parameter
+    int readPixel(const uint8_t* data, int width, int x, int y);
+
+    // Test pointer to struct (modify in place)
+    bool normalizeBox(BoundingBox* box, int maxWidth, int maxHeight);
+
+    // Test const pointer to struct
+    double getBoxAspectRatio(const BoundingBox* box);
+
+    // Test returning pointer (caller owns memory) - returns null on error
+    BoundingBox* cloneBox(const BoundingBox& source);
+
+    // Test with struct containing metadata
+    int getImageSize(const ImageData& info);
+
+    // Test callback with struct reference
+    int processImages(int count, ImageCallback callback);
+};
+
+// Manager class for testing class object parameters
+class ObjectManager {
+    ObjectManager();
+
+    // Test passing another class by pointer
+    int useCalculator(Calculator* calc, int a, int b);
+
+    // Test passing another class by const pointer
+    double inspectCalculator(const Calculator* calc);
+
+    // Test passing another class by const reference
+    int getCalculatorVersion(const Calculator& calc);
+
+    // Test returning class pointer (creates new instance)
+    Calculator* createCalculator();
+
+    // Test passing multiple class objects
+    int combineResults(const Calculator& calc1, const Calculator& calc2);
+};
+
+// Task processor for testing enum parameters
+class TaskProcessor {
+    TaskProcessor();
+
+    // Get current status - tests enum return
+    Status getStatus() const;
+
+    // Set status - tests enum input parameter
+    bool setStatus(Status status);
+
+    // Get color by index - tests enum return with input
+    Color getColorByIndex(int index);
+
+    // Check if color is primary - tests enum input
+    bool isPrimaryColor(Color color);
+
+    // Convert status to string - tests enum input with string return
+    string statusToString(Status status);
+
+    // Parse status from code - tests int input with enum return
+    Status statusFromCode(int code);
 };
