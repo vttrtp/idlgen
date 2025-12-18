@@ -1,6 +1,6 @@
 """Client Generator - generates C++ wrapper for dynamic library loading"""
 
-from .types import ParsedIDL, Interface, Method, Member, Param, Callback
+from .types import ParsedIDL, Class, Method, Member, Param, Callback
 from .type_mapper import TypeMapper
 
 
@@ -37,8 +37,8 @@ class ClientGenerator:
         # Generate std::function typedefs for callbacks
         lines.extend(self._generate_callback_typedefs())
 
-        for iface in self.idl.interfaces:
-            lines.extend(self._interface_header(iface))
+        for cls in self.idl.classes:
+            lines.extend(self._class_header(cls))
 
         lines.append(f"}} // namespace {self.namespace}_client")
         return "\n".join(lines)
@@ -75,13 +75,13 @@ class ClientGenerator:
             "",
         ]
 
-        for iface in self.idl.interfaces:
-            lines.extend(self._fn_pointer_types(iface))
+        for cls in self.idl.classes:
+            lines.extend(self._fn_pointer_types(cls))
 
         lines.append("")
 
-        for iface in self.idl.interfaces:
-            lines.extend(self._fn_pointer_vars(iface))
+        for cls in self.idl.classes:
+            lines.extend(self._fn_pointer_vars(cls))
 
         lines.extend([
             "",
@@ -99,27 +99,27 @@ class ClientGenerator:
 
         lines.extend(self._initialize_fn())
 
-        for iface in self.idl.interfaces:
-            lines.extend(self._interface_impl(iface))
+        for cls in self.idl.classes:
+            lines.extend(self._class_impl(cls))
 
         lines.append(f"}} // namespace {self.namespace}_client")
         return "\n".join(lines)
 
-    def _interface_header(self, iface: Interface) -> list[str]:
-        h = f"{iface.name}Handle"
+    def _class_header(self, cls: Class) -> list[str]:
+        h = f"{cls.name}Handle"
         lines = []
 
         # Result class - one per unique vector element type
-        vec_methods = [m for m in iface.methods if TypeMapper.is_vector(m.return_type)]
+        vec_methods = [m for m in cls.methods if TypeMapper.is_vector(m.return_type)]
         result_types = set()
         for m in vec_methods:
             inner = TypeMapper.vector_inner(m.return_type)
             result_types.add(inner)
         
         for inner in sorted(result_types):
-            result_name = self._result_struct_name(iface.name, inner)
+            result_name = self._result_struct_name(cls.name, inner)
             c_result_name = f"::{result_name}"
-            client_result = self._client_result_name(iface.name, inner)
+            client_result = self._client_result_name(cls.name, inner)
             lines.extend([
                 f"class {client_result} {{",
                 "public:",
@@ -140,33 +140,33 @@ class ClientGenerator:
             ])
 
         # Main class
-        lines.append(f"class {iface.name} {{")
+        lines.append(f"class {cls.name} {{")
         lines.append("public:")
 
-        ctor = next((m for m in iface.methods if m.is_constructor), None)
+        ctor = next((m for m in cls.methods if m.is_constructor), None)
         if ctor:
             cpp_params = ", ".join(self._param_to_cpp_decl(p) for p in ctor.params)
-            lines.append(f"    explicit {iface.name}({cpp_params});")
+            lines.append(f"    explicit {cls.name}({cpp_params});")
 
         lines.extend([
-            f"    ~{iface.name}() = default;",
+            f"    ~{cls.name}() = default;",
             "",
-            f"    {iface.name}(const {iface.name}&) = delete;",
-            f"    {iface.name}& operator=(const {iface.name}&) = delete;",
-            f"    {iface.name}({iface.name}&&) noexcept = default;",
-            f"    {iface.name}& operator=({iface.name}&&) noexcept = default;",
+            f"    {cls.name}(const {cls.name}&) = delete;",
+            f"    {cls.name}& operator=(const {cls.name}&) = delete;",
+            f"    {cls.name}({cls.name}&&) noexcept = default;",
+            f"    {cls.name}& operator=({cls.name}&&) noexcept = default;",
             "",
         ])
 
-        for member in iface.members:
+        for member in cls.members:
             ret = TypeMapper.to_cpp(member.type)
             getter = self._getter_name(member)
             lines.append(f"    [[nodiscard]] {ret} {getter}() const noexcept;")
 
-        for method in iface.methods:
+        for method in cls.methods:
             if method.is_constructor:
                 continue
-            ret = self._cpp_return_type(iface.name, method.return_type)
+            ret = self._cpp_return_type(cls.name, method.return_type)
             params = ", ".join(self._param_to_cpp_decl(p) for p in method.params)
             const_q = " const" if method.is_const else ""
             lines.append(f"    [[nodiscard]] {ret} {method.name}({params}){const_q};")
@@ -181,39 +181,39 @@ class ClientGenerator:
 
         return lines
 
-    def _fn_pointer_types(self, iface: Interface) -> list[str]:
-        h = f"{iface.name}Handle"
-        prefix = iface.name
+    def _fn_pointer_types(self, cls: Class) -> list[str]:
+        h = f"{cls.name}Handle"
+        prefix = cls.name
         lines = []
 
-        ctor = next((m for m in iface.methods if m.is_constructor), None)
+        ctor = next((m for m in cls.methods if m.is_constructor), None)
         if ctor:
             c_params = ", ".join(self._param_to_c_type(p) for p in ctor.params) or "void"
             lines.append(f"using {prefix}CreateFn = {h}*(*)({c_params});")
             lines.append(f"using {prefix}DestroyFn = void(*)({h}*);")
 
-        for method in iface.methods:
+        for method in cls.methods:
             if method.is_constructor:
                 continue
-            ret = self._c_return_type_for_method(iface.name, method.return_type)
+            ret = self._c_return_type_for_method(cls.name, method.return_type)
             params = [f"{h}*"] + [self._param_to_c_type(p) for p in method.params]
             fn_name = method.name[0].upper() + method.name[1:]
             lines.append(f"using {prefix}{fn_name}Fn = {ret}(*)({', '.join(params)});")
 
         # Function pointers for result accessors per unique element type
-        vec_methods = [m for m in iface.methods if TypeMapper.is_vector(m.return_type)]
+        vec_methods = [m for m in cls.methods if TypeMapper.is_vector(m.return_type)]
         result_types = set()
         for m in vec_methods:
             inner = TypeMapper.vector_inner(m.return_type)
             result_types.add(inner)
         
         for inner in sorted(result_types):
-            result_name = self._result_struct_name(iface.name, inner)
+            result_name = self._result_struct_name(cls.name, inner)
             lines.append(f"using {result_name}GetCountFn = int(*)(const {result_name}*);")
             lines.append(f"using {result_name}GetDataFn = const {inner}*(*)(const {result_name}*);")
             lines.append(f"using {result_name}FreeFn = void(*)({result_name}*);")
 
-        for member in iface.members:
+        for member in cls.members:
             ret = "int" if member.type == "bool" else TypeMapper.to_c(member.type)
             getter = self._getter_name(member)
             fn_name = getter[0].upper() + getter[1:]
@@ -221,35 +221,35 @@ class ClientGenerator:
 
         return lines
 
-    def _fn_pointer_vars(self, iface: Interface) -> list[str]:
-        prefix = iface.name
+    def _fn_pointer_vars(self, cls: Class) -> list[str]:
+        prefix = cls.name
         lines = []
 
-        ctor = next((m for m in iface.methods if m.is_constructor), None)
+        ctor = next((m for m in cls.methods if m.is_constructor), None)
         if ctor:
             lines.append(f"{prefix}CreateFn g_{prefix}_create = nullptr;")
             lines.append(f"{prefix}DestroyFn g_{prefix}_destroy = nullptr;")
 
-        for method in iface.methods:
+        for method in cls.methods:
             if method.is_constructor:
                 continue
             fn_name = method.name[0].upper() + method.name[1:]
             lines.append(f"{prefix}{fn_name}Fn g_{prefix}_{method.name} = nullptr;")
 
         # Variables for result accessors per unique element type
-        vec_methods = [m for m in iface.methods if TypeMapper.is_vector(m.return_type)]
+        vec_methods = [m for m in cls.methods if TypeMapper.is_vector(m.return_type)]
         result_types = set()
         for m in vec_methods:
             inner = TypeMapper.vector_inner(m.return_type)
             result_types.add(inner)
         
         for inner in sorted(result_types):
-            result_name = self._result_struct_name(iface.name, inner)
+            result_name = self._result_struct_name(cls.name, inner)
             lines.append(f"{result_name}GetCountFn g_{result_name}_getCount = nullptr;")
             lines.append(f"{result_name}GetDataFn g_{result_name}_getData = nullptr;")
             lines.append(f"{result_name}FreeFn g_{result_name}_free = nullptr;")
 
-        for member in iface.members:
+        for member in cls.members:
             getter = self._getter_name(member)
             fn_name = getter[0].upper() + getter[1:]
             lines.append(f"{prefix}{fn_name}Fn g_{prefix}_{getter} = nullptr;")
@@ -270,34 +270,34 @@ class ClientGenerator:
             "",
         ]
 
-        for iface in self.idl.interfaces:
-            prefix = iface.name
+        for cls in self.idl.classes:
+            prefix = cls.name
 
-            ctor = next((m for m in iface.methods if m.is_constructor), None)
+            ctor = next((m for m in cls.methods if m.is_constructor), None)
             if ctor:
                 lines.append(f'    g_{prefix}_create = reinterpret_cast<{prefix}CreateFn>(loadSymbol("{prefix}_create"));')
                 lines.append(f'    g_{prefix}_destroy = reinterpret_cast<{prefix}DestroyFn>(loadSymbol("{prefix}_destroy"));')
 
-            for method in iface.methods:
+            for method in cls.methods:
                 if method.is_constructor:
                     continue
                 fn_name = method.name[0].upper() + method.name[1:]
                 lines.append(f'    g_{prefix}_{method.name} = reinterpret_cast<{prefix}{fn_name}Fn>(loadSymbol("{prefix}_{method.name}"));')
 
             # Load result accessors per unique element type
-            vec_methods = [m for m in iface.methods if TypeMapper.is_vector(m.return_type)]
+            vec_methods = [m for m in cls.methods if TypeMapper.is_vector(m.return_type)]
             result_types = set()
             for m in vec_methods:
                 inner = TypeMapper.vector_inner(m.return_type)
                 result_types.add(inner)
             
             for inner in sorted(result_types):
-                result_name = self._result_struct_name(iface.name, inner)
+                result_name = self._result_struct_name(cls.name, inner)
                 lines.append(f'    g_{result_name}_getCount = reinterpret_cast<{result_name}GetCountFn>(loadSymbol("{result_name}_getCount"));')
                 lines.append(f'    g_{result_name}_getData = reinterpret_cast<{result_name}GetDataFn>(loadSymbol("{result_name}_getData"));')
                 lines.append(f'    g_{result_name}_free = reinterpret_cast<{result_name}FreeFn>(loadSymbol("{result_name}_free"));')
 
-            for member in iface.members:
+            for member in cls.members:
                 getter = self._getter_name(member)
                 fn_name = getter[0].upper() + getter[1:]
                 lines.append(f'    g_{prefix}_{getter} = reinterpret_cast<{prefix}{fn_name}Fn>(loadSymbol("{prefix}_{getter}"));')
@@ -313,22 +313,22 @@ class ClientGenerator:
 
         return lines
 
-    def _interface_impl(self, iface: Interface) -> list[str]:
-        prefix = iface.name
-        h = f"{iface.name}Handle"
+    def _class_impl(self, cls: Class) -> list[str]:
+        prefix = cls.name
+        h = f"{cls.name}Handle"
         lines = []
 
         # Result class impl - one per unique vector element type
-        vec_methods = [m for m in iface.methods if TypeMapper.is_vector(m.return_type)]
+        vec_methods = [m for m in cls.methods if TypeMapper.is_vector(m.return_type)]
         result_types = set()
         for m in vec_methods:
             inner = TypeMapper.vector_inner(m.return_type)
             result_types.add(inner)
         
         for inner in sorted(result_types):
-            result_name = self._result_struct_name(iface.name, inner)
+            result_name = self._result_struct_name(cls.name, inner)
             c_result_name = f"::{result_name}"
-            client_result = self._client_result_name(iface.name, inner)
+            client_result = self._client_result_name(cls.name, inner)
             lines.extend([
                 f"{client_result}::{client_result}() : result_(nullptr, nullptr) {{}}",
                 "",
@@ -354,13 +354,13 @@ class ClientGenerator:
             ])
 
         # Main class impl
-        ctor = next((m for m in iface.methods if m.is_constructor), None)
+        ctor = next((m for m in cls.methods if m.is_constructor), None)
         if ctor:
             cpp_params = ", ".join(self._param_to_cpp_decl(p) for p in ctor.params)
             c_args = ", ".join(self._to_c_arg(p) for p in ctor.params)
 
             lines.extend([
-                f"{iface.name}::{iface.name}({cpp_params})",
+                f"{cls.name}::{cls.name}({cpp_params})",
                 "    : handle_(nullptr, nullptr) {",
                 '    if (!isInitialized()) throw std::runtime_error("Library not initialized");',
                 f"    auto* h = g_{prefix}_create({c_args});",
@@ -370,31 +370,31 @@ class ClientGenerator:
                 "",
             ])
 
-        for member in iface.members:
+        for member in cls.members:
             ret = TypeMapper.to_cpp(member.type)
             getter = self._getter_name(member)
             default = "false" if member.type == "bool" else "0"
             lines.extend([
-                f"{ret} {iface.name}::{getter}() const noexcept {{",
+                f"{ret} {cls.name}::{getter}() const noexcept {{",
                 f"    return handle_ && g_{prefix}_{getter} ? g_{prefix}_{getter}(handle_.get()) : {default};",
                 "}",
                 "",
             ])
 
-        for method in iface.methods:
+        for method in cls.methods:
             if method.is_constructor:
                 continue
-            lines.extend(self._method_impl(iface, method, prefix))
+            lines.extend(self._method_impl(cls, method, prefix))
 
         return lines
 
-    def _method_impl(self, iface: Interface, method: Method, prefix: str) -> list[str]:
+    def _method_impl(self, cls: Class, method: Method, prefix: str) -> list[str]:
         """Generate method implementation, handling callbacks specially"""
-        ret = self._cpp_return_type(iface.name, method.return_type)
+        ret = self._cpp_return_type(cls.name, method.return_type)
         params = ", ".join(self._param_to_cpp_decl(p) for p in method.params)
         const_q = " const" if method.is_const else ""
         
-        lines = [f"{ret} {iface.name}::{method.name}({params}){const_q} {{"]
+        lines = [f"{ret} {cls.name}::{method.name}({params}){const_q} {{"]
         lines.append(f"    if (!handle_) return {ret}();")
         
         # Check if we have callback parameters

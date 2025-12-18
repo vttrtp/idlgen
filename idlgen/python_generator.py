@@ -2,7 +2,7 @@
 
 from typing import Optional
 from pathlib import Path
-from .types import ParsedIDL, Interface, Method, Member, Param, Struct, Callback
+from .types import ParsedIDL, Class, Method, Member, Param, Struct, Callback
 from .type_mapper import TypeMapper
 
 
@@ -85,8 +85,8 @@ class PythonGenerator:
         lines.extend(self._generate_function_decls())
 
         # Generate wrapper classes
-        for iface in self.idl.interfaces:
-            lines.extend(self._generate_class(iface))
+        for cls in self.idl.classes:
+            lines.extend(self._generate_class(cls))
 
         return "\n".join(lines)
 
@@ -144,11 +144,11 @@ class PythonGenerator:
         lines = []
         result_types = set()
 
-        for iface in self.idl.interfaces:
-            for method in iface.methods:
+        for cls in self.idl.classes:
+            for method in cls.methods:
                 if TypeMapper.is_vector(method.return_type):
                     inner = TypeMapper.vector_inner(method.return_type)
-                    result_types.add((iface.name, inner))
+                    result_types.add((cls.name, inner))
 
         if result_types:
             lines.extend([
@@ -176,14 +176,14 @@ class PythonGenerator:
             "",
         ]
 
-        for iface in self.idl.interfaces:
-            prefix = iface.name
-            handle = f"{iface.name}Handle"
+        for cls in self.idl.classes:
+            prefix = cls.name
+            handle = f"{cls.name}Handle"
 
             # Create/destroy
-            has_ctor = any(m.is_constructor for m in iface.methods)
+            has_ctor = any(m.is_constructor for m in cls.methods)
             if has_ctor:
-                ctor = next(m for m in iface.methods if m.is_constructor)
+                ctor = next(m for m in cls.methods if m.is_constructor)
                 ctor_params = [self._to_ctypes(p.type) for p in ctor.params]
                 
                 lines.append(f"_lib.{prefix}_create.restype = c_void_p")
@@ -198,12 +198,12 @@ class PythonGenerator:
                 lines.append("")
 
             # Methods
-            for method in iface.methods:
+            for method in cls.methods:
                 if method.is_constructor:
                     continue
 
                 func_name = f"{prefix}_{method.name}"
-                ret_type = self._c_return_type(iface.name, method.return_type)
+                ret_type = self._c_return_type(cls.name, method.return_type)
                 
                 param_types = ["c_void_p"]  # handle
                 for p in method.params:
@@ -220,10 +220,10 @@ class PythonGenerator:
                 lines.append("")
 
             # Result accessors for vector returns
-            for method in iface.methods:
+            for method in cls.methods:
                 if TypeMapper.is_vector(method.return_type):
                     inner = TypeMapper.vector_inner(method.return_type)
-                    result_name = f"{iface.name}_{inner}_CResult"
+                    result_name = f"{cls.name}_{inner}_CResult"
                     inner_ctype = self._to_ctypes(inner)
                     
                     lines.append(f"_lib.{result_name}_getCount.restype = c_int")
@@ -237,7 +237,7 @@ class PythonGenerator:
                     lines.append("")
 
             # Attribute getters
-            for member in iface.members:
+            for member in cls.members:
                 func_name = f"{prefix}_get{member.name[0].upper()}{member.name[1:]}"
                 ret_type = self._to_ctypes(member.type)
                 lines.append(f"_lib.{func_name}.restype = {ret_type}")
@@ -246,20 +246,20 @@ class PythonGenerator:
 
         return lines
 
-    def _generate_class(self, iface: Interface) -> list[str]:
-        """Generate Python wrapper class for an interface"""
+    def _generate_class(self, cls: Class) -> list[str]:
+        """Generate Python wrapper class for a class"""
         lines = [
             "# ══════════════════════════════════════════════════════════════",
-            f"# {iface.name} Class",
+            f"# {cls.name} Class",
             "# ══════════════════════════════════════════════════════════════",
             "",
-            f"class {iface.name}:",
-            f'    """Python wrapper for {iface.name} interface"""',
+            f"class {cls.name}:",
+            f'    """Python wrapper for {cls.name} class"""',
             "",
         ]
 
         # Constructor
-        ctor = next((m for m in iface.methods if m.is_constructor), None)
+        ctor = next((m for m in cls.methods if m.is_constructor), None)
         if ctor:
             params = ", ".join(f"{p.name}: {self._to_python_type(p.type)}" for p in ctor.params)
             if params:
@@ -269,11 +269,11 @@ class PythonGenerator:
             
             args = ", ".join(self._python_to_c_arg(p) for p in ctor.params)
             if args:
-                lines.append(f"        self._handle = _lib.{iface.name}_create({args})")
+                lines.append(f"        self._handle = _lib.{cls.name}_create({args})")
             else:
-                lines.append(f"        self._handle = _lib.{iface.name}_create()")
+                lines.append(f"        self._handle = _lib.{cls.name}_create()")
             lines.append("        if not self._handle:")
-            lines.append(f'            raise RuntimeError("Failed to create {iface.name}")')
+            lines.append(f'            raise RuntimeError("Failed to create {cls.name}")')
             lines.append("        # Store callback references to prevent GC")
             lines.append("        self._callbacks = []")
             lines.append("")
@@ -282,7 +282,7 @@ class PythonGenerator:
         lines.extend([
             "    def __del__(self):",
             "        if hasattr(self, '_handle') and self._handle:",
-            f"            _lib.{iface.name}_destroy(self._handle)",
+            f"            _lib.{cls.name}_destroy(self._handle)",
             "            self._handle = None",
             "",
             "    def __enter__(self):",
@@ -295,18 +295,18 @@ class PythonGenerator:
         ])
 
         # Methods
-        for method in iface.methods:
+        for method in cls.methods:
             if method.is_constructor:
                 continue
-            lines.extend(self._generate_method(iface, method))
+            lines.extend(self._generate_method(cls, method))
 
         # Attribute getters
-        for member in iface.members:
-            lines.extend(self._generate_attribute(iface, member))
+        for member in cls.members:
+            lines.extend(self._generate_attribute(cls, member))
 
         return lines
 
-    def _generate_method(self, iface: Interface, method: Method) -> list[str]:
+    def _generate_method(self, cls: Class, method: Method) -> list[str]:
         """Generate method wrapper"""
         # Build parameter list with type hints
         params = []
@@ -326,7 +326,7 @@ class PythonGenerator:
         ret_type = self._to_python_return_type(method.return_type)
 
         lines = [f"    def {method.name}(self, {params_str}) -> {ret_type}:"]
-        lines.append(f'        """Call {iface.name}.{method.name}"""')
+        lines.append(f'        """Call {cls.name}.{method.name}"""')
 
         # Build argument list
         args = ["self._handle"]
@@ -346,9 +346,9 @@ class PythonGenerator:
 
         if TypeMapper.is_vector(method.return_type):
             inner = TypeMapper.vector_inner(method.return_type)
-            result_name = f"{iface.name}_{inner}_CResult"
+            result_name = f"{cls.name}_{inner}_CResult"
             
-            lines.append(f"        result_ptr = _lib.{iface.name}_{method.name}({args_str})")
+            lines.append(f"        result_ptr = _lib.{cls.name}_{method.name}({args_str})")
             lines.append("        if not result_ptr:")
             lines.append("            return []")
             lines.append(f"        count = _lib.{result_name}_getCount(result_ptr)")
@@ -357,14 +357,14 @@ class PythonGenerator:
             lines.append(f"        _lib.{result_name}_free(result_ptr)")
             lines.append("        return items")
         elif self._is_struct_type(method.return_type):
-            lines.append(f"        return _lib.{iface.name}_{method.name}({args_str})")
+            lines.append(f"        return _lib.{cls.name}_{method.name}({args_str})")
         else:
-            lines.append(f"        return _lib.{iface.name}_{method.name}({args_str})")
+            lines.append(f"        return _lib.{cls.name}_{method.name}({args_str})")
 
         lines.append("")
         return lines
 
-    def _generate_attribute(self, iface: Interface, member: Member) -> list[str]:
+    def _generate_attribute(self, cls: Class, member: Member) -> list[str]:
         """Generate property for attribute"""
         getter_name = f"get{member.name[0].upper()}{member.name[1:]}"
         ret_type = self._to_python_type(member.type)
@@ -373,7 +373,7 @@ class PythonGenerator:
             "    @property",
             f"    def {member.name}(self) -> {ret_type}:",
             f'        """Get {member.name} attribute"""',
-            f"        return _lib.{iface.name}_{getter_name}(self._handle)",
+            f"        return _lib.{cls.name}_{getter_name}(self._handle)",
             "",
         ]
 

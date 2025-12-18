@@ -48,13 +48,6 @@ def main():
     parser.add_argument("--java-output", default="", help="Java source output directory (alternative)")
     parser.add_argument("--python", action="store_true", help="Generate Python bindings")
     parser.add_argument("--python-output", default="", help="Python bindings output directory")
-    # Explicit output file options (ignored, for compatibility)
-    parser.add_argument("--c-api", default="", help="C API header output (ignored)")
-    parser.add_argument("--c-api-impl", default="", help="C API impl output (ignored)")
-    parser.add_argument("--client", default="", help="Client header output (ignored)")
-    parser.add_argument("--client-impl", default="", help="Client impl output (ignored)")
-    parser.add_argument("--jni-header", default="", help="JNI header output (ignored)")
-    parser.add_argument("--jni-impl", default="", help="JNI impl output (ignored)")
     args = parser.parse_args()
 
     # Support both positional and --idl argument
@@ -111,9 +104,9 @@ def main():
             types_path.write_text(jni.generate_java_types())
             print(f"Generated: {types_path}")
         
-        for iface in idl.interfaces:
-            java_path = java_pkg_dir / f"{iface.name}.java"
-            java_path.write_text(jni.generate_java_class(iface))
+        for cls in idl.classes:
+            java_path = java_pkg_dir / f"{cls.name}.java"
+            java_path.write_text(jni.generate_java_class(cls))
             print(f"Generated: {java_path}")
 
     # Generate Python bindings if requested

@@ -78,7 +78,7 @@ struct Point {
 
 callback OnResult(Point result);
 
-interface Calculator {
+class Calculator {
     int add(int a, int b);
     void processAsync(OnResult callback);
 }

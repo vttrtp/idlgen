@@ -9,7 +9,7 @@ Parses C++-like IDL definitions and generates:
   5. Python bindings using ctypes
 """
 
-from .types import Param, Member, Method, Interface, Struct, ParsedIDL
+from .types import Param, Member, Method, Class, Struct, ParsedIDL
 from .parser import IDLParser
 from .type_mapper import TypeMapper
 from .c_api_generator import CAPIGenerator
@@ -19,7 +19,7 @@ from .jni_generator import JNIGenerator
 from .python_generator import PythonGenerator
 
 __all__ = [
-    'Param', 'Member', 'Method', 'Interface', 'Struct', 'ParsedIDL',
+    'Param', 'Member', 'Method', 'Class', 'Struct', 'ParsedIDL',
     'IDLParser', 'TypeMapper',
     'CAPIGenerator', 'ClientGenerator', 'WASMGenerator', 'JNIGenerator',
     'PythonGenerator',

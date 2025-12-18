@@ -21,7 +21,7 @@ struct BoundingBox {
 };
 
 // Calculator class for testing numeric types
-interface Calculator {
+class Calculator {
     Calculator();
 
     // Basic arithmetic - tests various return types
@@ -39,7 +39,7 @@ interface Calculator {
 };
 
 // Geometry helper for testing vector return with different struct types
-interface Geometry {
+class Geometry {
     Geometry();
 
     // Create a sequence of points - returns vector<Point>
@@ -53,7 +53,7 @@ interface Geometry {
 };
 
 // Shape processor for testing struct parameters by value and reference
-interface ShapeProcessor {
+class ShapeProcessor {
     ShapeProcessor();
 
     // Test receiving struct by value
@@ -81,7 +81,7 @@ callback FilterCallback(int value) -> bool;
 callback TransformCallback(int value) -> int;
 
 // Async processor for testing callback support
-interface AsyncProcessor {
+class AsyncProcessor {
     AsyncProcessor();
 
     // Process with progress reporting - tests void callback

@@ -1,6 +1,6 @@
 """WASM Generator - generates Emscripten bindings for WebAssembly"""
 
-from .types import ParsedIDL, Interface, Method, Member, Param
+from .types import ParsedIDL, Class, Method, Member, Param
 from .type_mapper import TypeMapper
 
 
@@ -26,9 +26,9 @@ class WASMGenerator:
             "",
         ]
 
-        for iface in self.idl.interfaces:
-            lines.extend(self._interface_wrapper(iface))
-            lines.extend(self._interface_bindings(iface))
+        for cls in self.idl.classes:
+            lines.extend(self._class_wrapper(cls))
+            lines.extend(self._class_bindings(cls))
 
         # Generate struct bindings
         if self.idl.structs:
@@ -53,9 +53,9 @@ class WASMGenerator:
         lines.append("")
         return lines
 
-    def _interface_wrapper(self, iface: Interface) -> list[str]:
-        cpp_class = f"{self.namespace}::{iface.name}"
-        wasm_class = f"Wasm{iface.name}"
+    def _class_wrapper(self, cls: Class) -> list[str]:
+        cpp_class = f"{self.namespace}::{cls.name}"
+        wasm_class = f"Wasm{cls.name}"
         lines = [
             f"class {wasm_class} {{",
             "public:",
@@ -64,19 +64,19 @@ class WASMGenerator:
         ]
 
         # Constructor
-        ctor = next((m for m in iface.methods if m.is_constructor), None)
+        ctor = next((m for m in cls.methods if m.is_constructor), None)
         if ctor:
-            lines.extend(self._wasm_constructor(iface, ctor, cpp_class))
+            lines.extend(self._wasm_constructor(cls, ctor, cpp_class))
 
         # Attribute getters
-        for member in iface.members:
+        for member in cls.members:
             lines.extend(self._wasm_attribute(member))
 
         # Methods
-        for method in iface.methods:
+        for method in cls.methods:
             if method.is_constructor:
                 continue
-            lines.extend(self._wasm_method(iface, method))
+            lines.extend(self._wasm_method(cls, method))
 
         lines.extend([
             "private:",
@@ -87,7 +87,7 @@ class WASMGenerator:
 
         return lines
 
-    def _wasm_constructor(self, iface: Interface, ctor: Method, cpp_class: str) -> list[str]:
+    def _wasm_constructor(self, cls: Class, ctor: Method, cpp_class: str) -> list[str]:
         params = ", ".join(f"{self._wasm_param_type(p)} {p.name}" for p in ctor.params)
         args = ", ".join(p.name for p in ctor.params)
         
@@ -120,7 +120,7 @@ class WASMGenerator:
             "",
         ]
 
-    def _wasm_method(self, iface: Interface, method: Method) -> list[str]:
+    def _wasm_method(self, cls: Class, method: Method) -> list[str]:
         ret = self._wasm_return_type(method.return_type)
         params = ", ".join(f"{self._wasm_param_type(p)} {p.name}" for p in method.params)
         
@@ -261,26 +261,26 @@ class WASMGenerator:
             return "val::array()"
         return "{}"
 
-    def _interface_bindings(self, iface: Interface) -> list[str]:
-        wasm_class = f"Wasm{iface.name}"
+    def _class_bindings(self, cls: Class) -> list[str]:
+        wasm_class = f"Wasm{cls.name}"
         lines = [
-            f"EMSCRIPTEN_BINDINGS({self.namespace}_{iface.name.lower()}) {{",
-            f'    class_<{wasm_class}>("{iface.name}")',
+            f"EMSCRIPTEN_BINDINGS({self.namespace}_{cls.name.lower()}) {{",
+            f'    class_<{wasm_class}>("{cls.name}")',
             "        .constructor<>()",
         ]
 
-        ctor = next((m for m in iface.methods if m.is_constructor), None)
+        ctor = next((m for m in cls.methods if m.is_constructor), None)
         if ctor:
             lines.append(f'        .function("create", &{wasm_class}::create)')
 
-        for member in iface.members:
+        for member in cls.members:
             if member.type == "bool":
                 getter = f"is{member.name[0].upper()}{member.name[1:]}"
             else:
                 getter = f"get{member.name[0].upper()}{member.name[1:]}"
             lines.append(f'        .function("{getter}", &{wasm_class}::{getter})')
 
-        for method in iface.methods:
+        for method in cls.methods:
             if method.is_constructor:
                 continue
             lines.append(f'        .function("{method.name}", &{wasm_class}::{method.name})')

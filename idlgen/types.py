@@ -40,8 +40,8 @@ class Callback:
 
 
 @dataclass
-class Interface:
-    """IDL interface definition"""
+class Class:
+    """IDL class definition"""
     name: str
     members: list[Member] = field(default_factory=list)
     methods: list[Method] = field(default_factory=list)
@@ -58,5 +58,5 @@ class Struct:
 class ParsedIDL:
     """Complete parsed IDL result"""
     structs: list[Struct] = field(default_factory=list)
-    interfaces: list[Interface] = field(default_factory=list)
+    classes: list[Class] = field(default_factory=list)
     callbacks: list[Callback] = field(default_factory=list)

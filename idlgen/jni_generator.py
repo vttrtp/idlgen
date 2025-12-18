@@ -1,6 +1,6 @@
 """JNI Generator - generates Java Native Interface bindings"""
 
-from .types import ParsedIDL, Interface, Method, Member, Param
+from .types import ParsedIDL, Class, Method, Member, Param
 from .type_mapper import TypeMapper
 
 
@@ -28,8 +28,8 @@ class JNIGenerator:
             "",
         ]
 
-        for iface in self.idl.interfaces:
-            lines.extend(self._jni_method_decls(iface))
+        for cls in self.idl.classes:
+            lines.extend(self._jni_method_decls(cls))
 
         lines.extend([
             "#ifdef __cplusplus",
@@ -79,8 +79,8 @@ class JNIGenerator:
             "",
         ])
 
-        for iface in self.idl.interfaces:
-            lines.extend(self._jni_method_impls(iface))
+        for cls in self.idl.classes:
+            lines.extend(self._jni_method_impls(cls))
 
         return "\n".join(lines)
 
@@ -102,9 +102,9 @@ class JNIGenerator:
 
         return "\n".join(lines)
 
-    def generate_java_class(self, iface: Interface) -> str:
-        """Generate Java class for an interface"""
-        class_name = iface.name
+    def generate_java_class(self, cls: Class) -> str:
+        """Generate Java class for a class"""
+        class_name = cls.name
         lines = [
             "// AUTO-GENERATED - DO NOT EDIT",
             f"package {self.java_package};",
@@ -127,7 +127,7 @@ class JNIGenerator:
         ])
 
         # Constructor
-        ctor = next((m for m in iface.methods if m.is_constructor), None)
+        ctor = next((m for m in cls.methods if m.is_constructor), None)
         if ctor:
             java_params = ", ".join(self._param_to_java(p) for p in ctor.params)
             native_args = ", ".join(p.name for p in ctor.params)
@@ -154,10 +154,10 @@ class JNIGenerator:
         ])
 
         # Public methods
-        for method in iface.methods:
+        for method in cls.methods:
             if method.is_constructor:
                 continue
-            lines.extend(self._java_method(iface, method))
+            lines.extend(self._java_method(cls, method))
 
         # Native method declarations
         lines.append("    // Native methods")
@@ -166,7 +166,7 @@ class JNIGenerator:
             lines.append(f"    private static native long nativeCreate({native_params});")
         lines.append("    private static native void nativeDestroy(long handle);")
 
-        for method in iface.methods:
+        for method in cls.methods:
             if method.is_constructor:
                 continue
             lines.append(self._native_method_decl(method))
@@ -220,7 +220,7 @@ class JNIGenerator:
         """Check if type is a callback"""
         return any(cb.name == type_name for cb in self.idl.callbacks)
 
-    def _java_method(self, iface: Interface, method: Method) -> list[str]:
+    def _java_method(self, cls: Class, method: Method) -> list[str]:
         """Generate Java public method"""
         ret_type = self._return_to_java_type(method.return_type)
         params = ", ".join(self._param_to_java(p) for p in method.params)
@@ -252,18 +252,18 @@ class JNIGenerator:
         params = ["long handle"] + [self._param_to_java(p) for p in method.params]
         return f"    private static native {ret_type} {native_name}({', '.join(params)});"
 
-    def _jni_method_decls(self, iface: Interface) -> list[str]:
+    def _jni_method_decls(self, cls: Class) -> list[str]:
         """Generate JNI method declarations in header"""
-        jni_class = self._jni_class_name(iface.name)
+        jni_class = self._jni_class_name(cls.name)
         lines = []
 
-        ctor = next((m for m in iface.methods if m.is_constructor), None)
+        ctor = next((m for m in cls.methods if m.is_constructor), None)
         if ctor:
             params = ["JNIEnv*", "jclass"] + [self._param_to_jni_type(p) for p in ctor.params]
             lines.append(f"JNIEXPORT jlong JNICALL {jni_class}_nativeCreate({', '.join(params)});")
             lines.append(f"JNIEXPORT void JNICALL {jni_class}_nativeDestroy(JNIEnv*, jclass, jlong);")
 
-        for method in iface.methods:
+        for method in cls.methods:
             if method.is_constructor:
                 continue
             ret = self._return_to_jni_type(method.return_type)
@@ -274,13 +274,13 @@ class JNIGenerator:
         lines.append("")
         return lines
 
-    def _jni_method_impls(self, iface: Interface) -> list[str]:
+    def _jni_method_impls(self, cls: Class) -> list[str]:
         """Generate JNI method implementations"""
-        jni_class = self._jni_class_name(iface.name)
-        cpp_class = f"{self.namespace}::{iface.name}"
+        jni_class = self._jni_class_name(cls.name)
+        cpp_class = f"{self.namespace}::{cls.name}"
         lines = []
 
-        ctor = next((m for m in iface.methods if m.is_constructor), None)
+        ctor = next((m for m in cls.methods if m.is_constructor), None)
         if ctor:
             jni_params = ", ".join(["JNIEnv* env", "jclass"] + 
                                    [f"{self._param_to_jni_type(p)} {p.name}" for p in ctor.params])
@@ -306,10 +306,10 @@ class JNIGenerator:
             lines.append("}")
             lines.append("")
 
-        for method in iface.methods:
+        for method in cls.methods:
             if method.is_constructor:
                 continue
-            lines.extend(self._jni_method_impl(iface, method, jni_class, cpp_class))
+            lines.extend(self._jni_method_impl(cls, method, jni_class, cpp_class))
 
         return lines
 
@@ -384,7 +384,7 @@ class JNIGenerator:
         }
         return mapping.get(return_type, 'CallIntMethod')
 
-    def _jni_method_impl(self, iface: Interface, method: Method, jni_class: str, cpp_class: str) -> list[str]:
+    def _jni_method_impl(self, cls: Class, method: Method, jni_class: str, cpp_class: str) -> list[str]:
         """Generate single JNI method implementation"""
         ret = self._return_to_jni_type(method.return_type)
         native_name = f"native{method.name[0].upper()}{method.name[1:]}"

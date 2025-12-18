@@ -1,7 +1,7 @@
 """C++-like IDL parser"""
 
 import re
-from .types import Param, Member, Method, Interface, Struct, Callback, ParsedIDL
+from .types import Param, Member, Method, Class, Struct, Callback, ParsedIDL
 
 
 class IDLParser:
@@ -19,7 +19,7 @@ class IDLParser:
         result = ParsedIDL()
         result.structs = self._parse_structs()
         result.callbacks = self._parse_callbacks()
-        result.interfaces = self._parse_interfaces()
+        result.classes = self._parse_classes()
         return result
 
     def _parse_structs(self) -> list[Struct]:
@@ -46,26 +46,26 @@ class IDLParser:
             callbacks.append(Callback(name=name, return_type=return_type, params=params))
         return callbacks
 
-    def _parse_interfaces(self) -> list[Interface]:
-        interfaces = []
-        pattern = r'interface\s+(\w+)\s*\{([^}]*)\}'
+    def _parse_classes(self) -> list[Class]:
+        classes = []
+        pattern = r'class\s+(\w+)\s*\{([^}]*)\}'
         for match in re.finditer(pattern, self.content):
             name, body = match.groups()
-            iface = Interface(name=name)
-            self._parse_interface_body(body, iface)
-            interfaces.append(iface)
-        return interfaces
+            cls = Class(name=name)
+            self._parse_class_body(body, cls)
+            classes.append(cls)
+        return classes
 
-    def _parse_interface_body(self, body: str, iface: Interface):
+    def _parse_class_body(self, body: str, cls: Class):
         for line in body.strip().split(';'):
             line = line.strip()
             if not line:
                 continue
 
             # Check for constructor: ClassName(params)
-            if m := re.match(rf'{iface.name}\s*\(([^)]*)\)', line):
+            if m := re.match(rf'{cls.name}\s*\(([^)]*)\)', line):
                 params = self._parse_params(m.group(1))
-                iface.methods.append(Method(
+                cls.methods.append(Method(
                     name="constructor",
                     return_type="void",
                     params=params,
@@ -77,7 +77,7 @@ class IDLParser:
                 method_name = m.group(2)
                 params = self._parse_params(m.group(3))
                 is_const = m.group(4) is not None
-                iface.methods.append(Method(
+                cls.methods.append(Method(
                     name=method_name,
                     return_type=return_type,
                     params=params,
