@@ -180,11 +180,14 @@ class WASMGenerator:
 
         lines = [f"    {ret} {method.name}({params}) {{"]
         
-        # Add vector conversion for uint8_t* parameters
+        # Add vector conversion for uint8_t* parameters (using efficient typed_memory_view)
         if has_uint8_ptr:
             for p in method.params:
                 if p.type == "uint8_t" and p.is_pointer:
-                    lines.append(f"        auto {p.name}Vec = vecFromJSArray<uint8_t>({p.name});")
+                    lines.append(f'        unsigned int {p.name}Len = {p.name}["length"].as<unsigned int>();')
+                    lines.append(f"        std::vector<uint8_t> {p.name}Vec({p.name}Len);")
+                    lines.append(f"        val {p.name}MemView = val(typed_memory_view({p.name}Len, {p.name}Vec.data()));")
+                    lines.append(f'        {p.name}MemView.call<void>("set", {p.name});')
         
         # Add callback wrappers
         for param, cb_def in callback_params:
