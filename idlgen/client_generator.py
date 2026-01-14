@@ -1,15 +1,27 @@
 """Client Generator - generates C++ wrapper for dynamic library loading"""
 
-from .types import ParsedIDL, Class, Method, Member, Param, Callback
+from .types import ParsedIDL, IDLModule, Class, Method, Member, Param, Callback
 from .type_mapper import TypeMapper
 
 
 class ClientGenerator:
     """Generates C++ client wrapper for dynamic loading"""
 
-    def __init__(self, idl: ParsedIDL, namespace: str):
+    def __init__(self, idl: ParsedIDL, namespace: str,
+                 module: IDLModule | None = None, dep_headers: list[str] | None = None,
+                 dep_types: list[str] | None = None, client_header: str = ""):
         self.idl = idl
         self.namespace = namespace
+        self.module = module
+        self.dep_headers = dep_headers or []
+        # Types from dependencies that need using declarations
+        self.dep_types = dep_types or []
+        # Common client header (e.g., "face_detector_client.hpp")
+        self.client_header = client_header
+
+    def _lookup(self):
+        """Get the object to use for type lookups (module or idl)"""
+        return self.module if self.module else self.idl
 
     def generate_header(self) -> str:
         lines = [
@@ -21,20 +33,44 @@ class ClientGenerator:
             "#include <memory>",
             "#include <functional>",
             f'#include "{self.namespace}_c_api.h"',
+        ]
+
+        # Include common client header if provided
+        if self.client_header:
+            lines.append(f'#include "{self.client_header}"')
+
+        # Include dependency headers
+        for dep_header in self.dep_headers:
+            lines.append(f'#include "{dep_header}"')
+
+        lines.extend([
             "",
             f"namespace {self.namespace}_client {{",
             "",
-            "bool initialize(const std::string& libraryPath);",
-            "bool isInitialized();",
-            "",
-        ]
+        ])
 
-        # Generate using declarations for enums
+        # Only declare initialize/isInitialized if no common client header
+        # (they're defined inline in the common header)
+        if not self.client_header:
+            lines.extend([
+                "bool initialize(const std::string& libraryPath);",
+                "bool isInitialized();",
+                "",
+            ])
+
+        # Generate using declarations for types from dependencies
+        for type_name in self.dep_types:
+            lines.append(f"using {type_name} = ::{type_name};")
+        if self.dep_types:
+            lines.append("")
+
+        # Generate using declarations for local enums
         for e in self.idl.enums:
             lines.append(f"using {e.name} = ::{e.name};")
         if self.idl.enums:
             lines.append("")
 
+        # Generate using declarations for local structs
         for d in self.idl.structs:
             lines.append(f"using {d.name} = ::{d.name};")
         if self.idl.structs:
@@ -65,19 +101,11 @@ class ClientGenerator:
             "// AUTO-GENERATED - DO NOT EDIT",
             f'#include "{self.namespace}_client.hpp"',
             "",
-            "#ifdef _WIN32",
-            "#include <windows.h>",
-            "#else",
-            "#include <dlfcn.h>",
-            "#endif",
-            "",
             "#include <stdexcept>",
             "",
             f"namespace {self.namespace}_client {{",
             "",
             "namespace {",
-            "",
-            "void* g_library = nullptr;",
             "",
         ]
 
@@ -90,14 +118,6 @@ class ClientGenerator:
             lines.extend(self._fn_pointer_vars(cls))
 
         lines.extend([
-            "",
-            "void* loadSymbol(const char* name) {",
-            "#ifdef _WIN32",
-            "    return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(g_library), name));",
-            "#else",
-            "    return dlsym(g_library, name);",
-            "#endif",
-            "}",
             "",
             "} // namespace",
             "",
@@ -263,32 +283,49 @@ class ClientGenerator:
         return lines
 
     def _initialize_fn(self) -> list[str]:
-        lines = [
-            "bool initialize(const std::string& libraryPath) {",
-            "    if (g_library) return true;",
-            "",
-            "#ifdef _WIN32",
-            "    g_library = LoadLibraryA(libraryPath.c_str());",
-            "#else",
-            "    g_library = dlopen(libraryPath.c_str(), RTLD_NOW);",
-            "#endif",
-            "    if (!g_library) return false;",
-            "",
-        ]
+        # Use common client utilities when client_header is provided
+        if self.client_header:
+            lines = [
+                "void loadSymbols() {",
+            ]
+        else:
+            lines = [
+                "void* g_library = nullptr;",
+                "",
+                "void* loadSymbol(const char* name) {",
+                "#ifdef _WIN32",
+                "    return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(g_library), name));",
+                "#else",
+                "    return dlsym(g_library, name);",
+                "#endif",
+                "}",
+                "",
+                "bool initialize(const std::string& libraryPath) {",
+                "    if (g_library) return true;",
+                "",
+                "#ifdef _WIN32",
+                "    g_library = LoadLibraryA(libraryPath.c_str());",
+                "#else",
+                "    g_library = dlopen(libraryPath.c_str(), RTLD_NOW);",
+                "#endif",
+                "    if (!g_library) return false;",
+                "",
+            ]
 
         for cls in self.idl.classes:
             prefix = cls.name
+            load_sym = "idl_client::detail::loadSymbol" if self.client_header else "loadSymbol"
 
             ctor = next((m for m in cls.methods if m.is_constructor), None)
             if ctor:
-                lines.append(f'    g_{prefix}_create = reinterpret_cast<{prefix}CreateFn>(loadSymbol("{prefix}_create"));')
-                lines.append(f'    g_{prefix}_destroy = reinterpret_cast<{prefix}DestroyFn>(loadSymbol("{prefix}_destroy"));')
+                lines.append(f'    g_{prefix}_create = reinterpret_cast<{prefix}CreateFn>({load_sym}("{prefix}_create"));')
+                lines.append(f'    g_{prefix}_destroy = reinterpret_cast<{prefix}DestroyFn>({load_sym}("{prefix}_destroy"));')
 
             for method in cls.methods:
                 if method.is_constructor:
                     continue
                 fn_name = method.name[0].upper() + method.name[1:]
-                lines.append(f'    g_{prefix}_{method.name} = reinterpret_cast<{prefix}{fn_name}Fn>(loadSymbol("{prefix}_{method.name}"));')
+                lines.append(f'    g_{prefix}_{method.name} = reinterpret_cast<{prefix}{fn_name}Fn>({load_sym}("{prefix}_{method.name}"));')
 
             # Load result accessors per unique element type
             vec_methods = [m for m in cls.methods if TypeMapper.is_vector(m.return_type)]
@@ -296,26 +333,41 @@ class ClientGenerator:
             for m in vec_methods:
                 inner = TypeMapper.vector_inner(m.return_type)
                 result_types.add(inner)
-            
+
             for inner in sorted(result_types):
                 result_name = self._result_struct_name(cls.name, inner)
-                lines.append(f'    g_{result_name}_getCount = reinterpret_cast<{result_name}GetCountFn>(loadSymbol("{result_name}_getCount"));')
-                lines.append(f'    g_{result_name}_getData = reinterpret_cast<{result_name}GetDataFn>(loadSymbol("{result_name}_getData"));')
-                lines.append(f'    g_{result_name}_free = reinterpret_cast<{result_name}FreeFn>(loadSymbol("{result_name}_free"));')
+                lines.append(f'    g_{result_name}_getCount = reinterpret_cast<{result_name}GetCountFn>({load_sym}("{result_name}_getCount"));')
+                lines.append(f'    g_{result_name}_getData = reinterpret_cast<{result_name}GetDataFn>({load_sym}("{result_name}_getData"));')
+                lines.append(f'    g_{result_name}_free = reinterpret_cast<{result_name}FreeFn>({load_sym}("{result_name}_free"));')
 
             for member in cls.members:
                 getter = self._getter_name(member)
                 fn_name = getter[0].upper() + getter[1:]
-                lines.append(f'    g_{prefix}_{getter} = reinterpret_cast<{prefix}{fn_name}Fn>(loadSymbol("{prefix}_{getter}"));')
+                lines.append(f'    g_{prefix}_{getter} = reinterpret_cast<{prefix}{fn_name}Fn>({load_sym}("{prefix}_{getter}"));')
 
-        lines.extend([
-            "",
-            "    return true;",
-            "}",
-            "",
-            "bool isInitialized() { return g_library != nullptr; }",
-            "",
-        ])
+        if self.client_header:
+            lines.extend([
+                "}",
+                "",
+                "bool g_symbolsLoaded = false;",
+                "",
+                "void ensureSymbolsLoaded() {",
+                "    if (!g_symbolsLoaded && idl_client::isInitialized()) {",
+                "        loadSymbols();",
+                "        g_symbolsLoaded = true;",
+                "    }",
+                "}",
+                "",
+            ])
+        else:
+            lines.extend([
+                "",
+                "    return true;",
+                "}",
+                "",
+                "bool isInitialized() { return g_library != nullptr; }",
+                "",
+            ])
 
         return lines
 
@@ -364,17 +416,23 @@ class ClientGenerator:
         if ctor:
             cpp_params = ", ".join(self._param_to_cpp_decl(p) for p in ctor.params)
             c_args = ", ".join(self._to_c_arg(p) for p in ctor.params)
+            is_init = "idl_client::isInitialized" if self.client_header else "isInitialized"
 
-            lines.extend([
+            init_lines = [
                 f"{cls.name}::{cls.name}({cpp_params})",
                 "    : handle_(nullptr, nullptr) {",
-                '    if (!isInitialized()) throw std::runtime_error("Library not initialized");',
+                f'    if (!{is_init}()) throw std::runtime_error("Library not initialized");',
+            ]
+            if self.client_header:
+                init_lines.append("    ensureSymbolsLoaded();")
+            init_lines.extend([
                 f"    auto* h = g_{prefix}_create({c_args});",
                 f"    handle_ = std::unique_ptr<::{h}, std::function<void(::{h}*)>>(h,",
                 f"        [](::{h}* p) {{ if (p && g_{prefix}_destroy) g_{prefix}_destroy(p); }});",
                 "}",
                 "",
             ])
+            lines.extend(init_lines)
 
         for member in cls.members:
             ret = TypeMapper.to_cpp(member.type)
@@ -404,12 +462,12 @@ class ClientGenerator:
         lines.append(f"    if (!handle_) return {ret}();")
         
         # Check if we have callback parameters
-        callback_params = [p for p in method.params if self._is_callback_type(p.type)]
-        
+        callback_params = [p for p in method.params if self._lookup().is_callback(p.type)]
+
         if callback_params:
             # Generate wrappers for each callback
             for p in callback_params:
-                cb = self._get_callback(p.type)
+                cb = self._lookup().find_callback(p.type)
                 cb_params = ", ".join(f"{TypeMapper.to_c(cp.type)} {cp.name}" for cp in cb.params)
                 cb_args = ", ".join(cp.name for cp in cb.params)
                 ret_type = TypeMapper.to_c(cb.return_type)
@@ -433,21 +491,17 @@ class ClientGenerator:
         lines.append("")
         return lines
 
-    def _is_callback_type(self, type_name: str) -> bool:
-        """Check if type is a callback"""
-        return any(cb.name == type_name for cb in self.idl.callbacks)
-
     def _param_to_cpp_decl(self, param: Param) -> str:
         """Convert param to C++ declaration for method signature"""
         # Callbacks use std::function (already defined in namespace)
-        if self._is_callback_type(param.type):
+        if self._lookup().is_callback(param.type):
             return f'const {param.type}& {param.name}'
-        
+
         base_type = TypeMapper.to_cpp(param.type)
-        
+
         if param.is_const:
             base_type = f'const {base_type}'
-        
+
         if param.is_pointer:
             return f'{base_type}* {param.name}'
         elif param.is_reference:
@@ -462,11 +516,11 @@ class ClientGenerator:
         """Convert param type to C type (without name)"""
         if param.type == 'string':
             return 'const char*'
-        
+
         # Callbacks are function pointers
-        if self._is_callback_type(param.type):
+        if self._lookup().is_callback(param.type):
             return f'::{param.type}'
-        
+
         base = TypeMapper.to_c(param.type)
         if param.is_const:
             base = f'const {base}'
@@ -478,13 +532,9 @@ class ClientGenerator:
         if TypeMapper.is_string(param.type):
             return f"{param.name}.c_str()"
         # Callbacks need a wrapper - the wrapper is generated as a static lambda
-        if self._is_callback_type(param.type):
+        if self._lookup().is_callback(param.type):
             return f"callback_wrapper_{param.name}"
         return param.name
-
-    def _get_callback(self, type_name: str) -> Callback:
-        """Get callback definition by name"""
-        return next((cb for cb in self.idl.callbacks if cb.name == type_name), None)
 
     def _getter_name(self, member: Member) -> str:
         prefix = "is" if member.type == "bool" else "get"

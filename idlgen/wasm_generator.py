@@ -1,15 +1,21 @@
 """WASM Generator - generates Emscripten bindings for WebAssembly"""
 
-from .types import ParsedIDL, Class, Method, Member, Param
+from .types import ParsedIDL, IDLModule, Class, Method, Member, Param
 from .type_mapper import TypeMapper
 
 
 class WASMGenerator:
     """Generates Emscripten bindings"""
 
-    def __init__(self, idl: ParsedIDL, namespace: str):
+    def __init__(self, idl: ParsedIDL, namespace: str,
+                 module: IDLModule | None = None):
         self.idl = idl
         self.namespace = namespace
+        self.module = module
+
+    def _lookup(self):
+        """Get the object to use for type lookups (module or idl)"""
+        return self.module if self.module else self.idl
 
     def generate(self, impl_header: str) -> str:
         lines = [
@@ -17,6 +23,9 @@ class WASMGenerator:
             "#include <emscripten/bind.h>",
             "#include <emscripten/val.h>",
             f'#include "{impl_header}"',
+        ]
+
+        lines.extend([
             "#include <vector>",
             "#include <memory>",
             "#include <string>",
@@ -24,7 +33,7 @@ class WASMGenerator:
             "",
             "using namespace emscripten;",
             "",
-        ]
+        ])
 
         for cls in self.idl.classes:
             lines.extend(self._class_wrapper(cls))
@@ -115,7 +124,7 @@ class WASMGenerator:
         """Check if method returns a pointer to a class type"""
         if method.return_type.endswith('*'):
             base_type = method.return_type.rstrip('*').strip()
-            return self._is_class_type(base_type)
+            return self._lookup().is_class(base_type)
         return False
     def _wasm_constructor(self, cls: Class, ctor: Method, cpp_class: str) -> list[str]:
         params = ", ".join(f"{self._wasm_param_type(p)} {p.name}" for p in ctor.params)
@@ -158,19 +167,19 @@ class WASMGenerator:
         has_uint8_ptr = any(p.type == "uint8_t" and p.is_pointer for p in method.params)
         
         # Check for callback parameters
-        callback_params = [(p, self._get_callback_def(p.type)) for p in method.params if self._is_callback_type(p.type)]
-        
+        callback_params = [(p, self._lookup().find_callback(p.type)) for p in method.params if self._lookup().is_callback(p.type)]
+
         # Build argument conversion
         args = []
         for p in method.params:
             if p.type == "uint8_t" and p.is_pointer:
                 args.append(f"{p.name}Vec.data()")
-            elif self._is_callback_type(p.type):
+            elif self._lookup().is_callback(p.type):
                 args.append(f"{p.name}Wrapper")
-            elif self._is_struct_type(p.type) and p.is_pointer:
+            elif self._lookup().is_struct(p.type) and p.is_pointer:
                 # Struct pointer - pass address of local copy
                 args.append(f"&{p.name}")
-            elif self._is_class_type(p.type) and p.is_pointer:
+            elif self._lookup().is_class(p.type) and p.is_pointer:
                 # Class pointer - pass address
                 args.append(f"&{p.name}")
             else:
@@ -211,13 +220,13 @@ class WASMGenerator:
         
         if TypeMapper.is_vector(method.return_type):
             inner = TypeMapper.vector_inner(method.return_type)
-            struct_def = next((d for d in self.idl.structs if d.name == inner), None)
-            
+            struct_def = self._lookup().find_struct(inner)
+
             lines.append("        val result = val::array();")
             lines.append("        if (!impl_) return result;")
             lines.append(f"        auto items = impl_->{method.name}({args_str});")
             lines.append("        for (const auto& item : items) {")
-            
+
             if struct_def:
                 lines.append("            val obj = val::object();")
                 for m in struct_def.members:
@@ -225,13 +234,13 @@ class WASMGenerator:
                 lines.append('            result.call<void>("push", obj);')
             else:
                 lines.append('            result.call<void>("push", item);')
-            
+
             lines.append("        }")
             lines.append("        return result;")
         elif method.return_type.endswith('*'):
             # Pointer return - handle struct/class pointers specially
             base_type = method.return_type.rstrip('*').strip()
-            if self._is_struct_type(base_type):
+            if self._lookup().is_struct(base_type):
                 # Struct pointer - dereference to return by value
                 lines.append(f"        if (!impl_) return {base_type}{{}};")
                 lines.append(f"        auto* result = impl_->{method.name}({args_str});")
@@ -253,22 +262,6 @@ class WASMGenerator:
         lines.append("")
         return lines
 
-    def _is_callback_type(self, type_name: str) -> bool:
-        """Check if type is a callback"""
-        return any(cb.name == type_name for cb in self.idl.callbacks)
-
-    def _is_struct_type(self, type_name: str) -> bool:
-        """Check if type is a struct"""
-        return any(s.name == type_name for s in self.idl.structs)
-
-    def _is_class_type(self, type_name: str) -> bool:
-        """Check if type is a class"""
-        return any(c.name == type_name for c in self.idl.classes)
-
-    def _get_callback_def(self, type_name: str):
-        """Get callback definition by name"""
-        return next((cb for cb in self.idl.callbacks if cb.name == type_name), None)
-
     def _wasm_cb_param_type(self, param: Param) -> str:
         """Get C++ type for callback parameter"""
         if param.type == "int":
@@ -278,9 +271,9 @@ class WASMGenerator:
         if param.type == "double":
             return f"double {param.name}"
         # Handle struct reference parameters
-        if self._is_struct_type(param.type) and param.is_reference:
+        if self._lookup().is_struct(param.type) and param.is_reference:
             return f"const {param.type}& {param.name}"
-        if self._is_struct_type(param.type):
+        if self._lookup().is_struct(param.type):
             return f"{param.type} {param.name}"
         return f"int {param.name}"
 
@@ -298,7 +291,7 @@ class WASMGenerator:
         """Convert param to WASM-compatible type"""
         if param.type == "uint8_t" and param.is_pointer:
             return "val"
-        if self._is_callback_type(param.type):
+        if self._lookup().is_callback(param.type):
             return "val"
         if param.type == "string":
             return "const std::string&"
@@ -307,7 +300,7 @@ class WASMGenerator:
         if param.type == "bool":
             return "bool"
         # Class types need namespace prefix
-        if self._is_class_type(param.type):
+        if self._lookup().is_class(param.type):
             return f"{self.namespace}::{param.type}"
         return TypeMapper.to_cpp(param.type)
 
@@ -315,7 +308,7 @@ class WASMGenerator:
         # Handle pointer returns - strip pointer and return by value for WASM
         base_type = idl_type.rstrip('*').strip()
         is_pointer = idl_type.endswith('*')
-        
+
         if TypeMapper.is_vector(idl_type):
             return "val"
         if idl_type == "bool":
@@ -325,8 +318,8 @@ class WASMGenerator:
         if idl_type == "string":
             return "std::string"
         # For struct/class pointer returns, return by value
-        if is_pointer and (self._is_struct_type(base_type) or self._is_class_type(base_type)):
-            if self._is_class_type(base_type):
+        if is_pointer and (self._lookup().is_struct(base_type) or self._lookup().is_class(base_type)):
+            if self._lookup().is_class(base_type):
                 return f"{self.namespace}::{base_type}*"  # Class pointers kept as-is (wrapped)
             return base_type  # Struct returns by value
         return TypeMapper.to_cpp(idl_type)

@@ -1,18 +1,29 @@
 """C API Generator - generates C header and implementation for shared library export"""
 
 from pathlib import Path
-from .types import ParsedIDL, Class, Method, Member, Param
+from .types import ParsedIDL, IDLModule, Class, Method, Member, Param
 from .type_mapper import TypeMapper
 
 
 class CAPIGenerator:
     """Generates C API header and implementation"""
 
-    def __init__(self, idl: ParsedIDL, namespace: str, api_macro: str = ""):
+    def __init__(self, idl: ParsedIDL, namespace: str, api_macro: str = "",
+                 module: IDLModule | None = None, dep_headers: list[str] | None = None,
+                 export_macro: str = ""):
         self.idl = idl
         self.namespace = namespace
         self.api_macro = api_macro or f"{namespace.upper()}_API"
-        self.export_macro = f"{namespace.upper()}_EXPORTS"
+        # Export macro should match api_macro for consistency across all files in a library
+        self.export_macro = export_macro or self.api_macro.replace("_API", "_EXPORTS")
+        # Module is used for type lookups across all files
+        self.module = module
+        # List of dependency header files to include
+        self.dep_headers = dep_headers or []
+
+    def _lookup(self):
+        """Get the object to use for type lookups (module or idl)"""
+        return self.module if self.module else self.idl
 
     def generate_header(self) -> str:
         lines = self._header_preamble()
@@ -38,28 +49,29 @@ class CAPIGenerator:
 
     def _header_preamble(self) -> list[str]:
         guard = f"{self.namespace.upper()}_C_API_H"
-        return [
+        # Derive export header name from api_macro (e.g., FACE_DETECTOR_API -> face_detector_export.h)
+        export_header = self.api_macro.lower().replace("_api", "_export.h")
+        lines = [
             "// AUTO-GENERATED - DO NOT EDIT",
             f"#ifndef {guard}",
             f"#define {guard}",
             "",
             "#include <stdint.h>",
+            f'#include "{export_header}"',
+        ]
+
+        # Include dependency headers
+        for dep_header in self.dep_headers:
+            lines.append(f'#include "{dep_header}"')
+
+        lines.extend([
             "",
             "#ifdef __cplusplus",
             'extern "C" {',
             "#endif",
             "",
-            "#ifdef _WIN32",
-            f"    #ifdef {self.export_macro}",
-            f"        #define {self.api_macro} __declspec(dllexport)",
-            "    #else",
-            f"        #define {self.api_macro} __declspec(dllimport)",
-            "    #endif",
-            "#else",
-            f'    #define {self.api_macro} __attribute__((visibility("default")))',
-            "#endif",
-            "",
-        ]
+        ])
+        return lines
 
     def _header_postamble(self) -> list[str]:
         return [
@@ -99,7 +111,7 @@ class CAPIGenerator:
         """Convert callback parameter to C type"""
         base = TypeMapper.to_c(param.type)
         # Struct references become const pointers in C callbacks
-        if param.is_reference and self._is_struct_type(param.type):
+        if param.is_reference and self._lookup().is_struct(param.type):
             if param.is_const:
                 return f"const {base}*"
             return f"{base}*"
@@ -312,7 +324,7 @@ class CAPIGenerator:
             elif method.return_type.endswith('*'):
                 # Pointer return - check if it's a class type
                 base_type = method.return_type.rstrip('*').strip()
-                if self._is_class_type(base_type):
+                if self._lookup().is_class(base_type):
                     # Wrap returned class pointer in a handle
                     handle_type = f"{base_type}Handle"
                     lines.append(f"    auto* obj = handle->impl->{method.name}({cpp_args});")
@@ -330,14 +342,10 @@ class CAPIGenerator:
 
         return lines
 
-    def _get_callback(self, type_name: str):
-        """Get callback definition by name"""
-        return next((cb for cb in self.idl.callbacks if cb.name == type_name), None)
-
     def _needs_callback_wrapper(self, cb) -> bool:
         """Check if callback needs a wrapper (has struct reference params)"""
         for p in cb.params:
-            if self._is_struct_type(p.type) and p.is_reference:
+            if self._lookup().is_struct(p.type) and p.is_reference:
                 return True
         return False
 
@@ -345,16 +353,16 @@ class CAPIGenerator:
         """Build C++ argument list, converting handles to impl pointers"""
         args = []
         for p in params:
-            if self._is_callback_type(p.type):
+            if self._lookup().is_callback(p.type):
                 # Check if callback needs wrapper
-                cb = self._get_callback(p.type)
+                cb = self._lookup().find_callback(p.type)
                 if cb and self._needs_callback_wrapper(cb):
                     # Generate inline lambda wrapper
                     wrapper = self._generate_callback_wrapper_inline(p.name, cb)
                     args.append(wrapper)
                 else:
                     args.append(p.name)
-            elif self._is_class_type(p.type):
+            elif self._lookup().is_class(p.type):
                 # Handle pointer -> impl pointer or reference
                 if p.is_reference:
                     # Reference parameter - dereference impl pointer
@@ -365,7 +373,7 @@ class CAPIGenerator:
                 else:
                     # By value (unlikely for classes) - dereference
                     args.append(f"*{p.name}->impl")
-            elif self._is_struct_type(p.type) and p.is_reference:
+            elif self._lookup().is_struct(p.type) and p.is_reference:
                 # Struct reference - dereference pointer if needed
                 args.append(f"*{p.name}" if p.is_pointer else p.name)
             else:
@@ -378,7 +386,7 @@ class CAPIGenerator:
         cpp_params = []
         c_call_args = []
         for p in cb.params:
-            if self._is_struct_type(p.type) and p.is_reference:
+            if self._lookup().is_struct(p.type) and p.is_reference:
                 if p.is_const:
                     cpp_params.append(f"const ::{p.type}& {p.name}")
                 else:
@@ -387,10 +395,10 @@ class CAPIGenerator:
             else:
                 cpp_params.append(f"{TypeMapper.to_cpp(p.type)} {p.name}")
                 c_call_args.append(p.name)
-        
+
         cpp_params_str = ", ".join(cpp_params)
         c_call_args_str = ", ".join(c_call_args)
-        
+
         # Return type handling
         if cb.return_type == "bool":
             return f"[{name}]({cpp_params_str}) {{ return {name}({c_call_args_str}) != 0; }}"
@@ -412,40 +420,22 @@ class CAPIGenerator:
             "",
         ]
 
-    def _is_callback_type(self, type_name: str) -> bool:
-        """Check if type is a callback"""
-        return any(cb.name == type_name for cb in self.idl.callbacks)
-
-    def _is_class_type(self, type_name: str) -> bool:
-        """Check if type is a class defined in IDL"""
-        # Strip pointer suffix if present
-        clean_type = type_name.rstrip('*').strip()
-        return any(c.name == clean_type for c in self.idl.classes)
-
-    def _is_struct_type(self, type_name: str) -> bool:
-        """Check if type is a struct defined in IDL"""
-        return any(s.name == type_name for s in self.idl.structs)
-
-    def _is_enum_type(self, type_name: str) -> bool:
-        """Check if type is an enum defined in IDL"""
-        return any(e.name == type_name for e in self.idl.enums)
-
     def _param_to_c(self, param: Param) -> str:
         """Convert param to C declaration"""
         if param.type == 'string':
             return f'const char* {param.name}'
-        
+
         # Callback types are already function pointers
-        if self._is_callback_type(param.type):
+        if self._lookup().is_callback(param.type):
             return f'{param.type} {param.name}'
-        
+
         # Class types use Handle pointers
-        if self._is_class_type(param.type):
+        if self._lookup().is_class(param.type):
             handle = f"{param.type}Handle"
             if param.is_const:
                 return f'const {handle}* {param.name}'
             return f'{handle}* {param.name}'
-        
+
         base = TypeMapper.to_c(param.type)
         if param.is_const:
             base = f'const {base}'
@@ -469,7 +459,7 @@ class CAPIGenerator:
         # Class pointer returns use Handle
         if idl_type.endswith('*'):
             base_type = idl_type.rstrip('*').strip()
-            if self._is_class_type(base_type):
+            if self._lookup().is_class(base_type):
                 return f"{base_type}Handle*"
         return TypeMapper.to_c(idl_type)
 
